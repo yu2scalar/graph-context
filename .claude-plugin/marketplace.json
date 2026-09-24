@@ -1,0 +1,14 @@
+{
+  "name": "graph-context",
+  "owner": {
+    "name": "Yuji Ochiai",
+    "email": "yuji.ochiai@scalar-labs.com"
+  },
+  "plugins": [
+    {
+      "name": "graph",
+      "source": "./plugin/",
+      "description": "Graph-based project context management for Claude Code: a schema-validated index over components, design docs and decision/issue registries; mandatory 1-hop/2-hop hydration before code changes; lossless handovers."
+    }
+  ]
+}

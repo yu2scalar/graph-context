@@ -1,0 +1,15 @@
+{
+  "$schema": "https://raw.githubusercontent.com/yu2scalar/graph-context/v3.2.0/plugin/skills/protocol/schema/graph_schema.json",
+  "current_node": null,
+  "nodes": {},
+  "config": {
+    "interaction_language": "en",
+    "handover_path": ".context/WIP_HANDOVER.md",
+    "design_root": "docs/",
+    "docs_scope": [
+      "docs/**/*.md"
+    ],
+    "registries": [],
+    "growth_threshold": 5
+  }
+}

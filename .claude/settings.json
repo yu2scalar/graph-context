@@ -1,0 +1,5 @@
+{
+  "enabledPlugins": {
+    "graph@graph-context": true
+  }
+}
