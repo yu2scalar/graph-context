@@ -39,7 +39,7 @@
 | D33 | Backlog model (resolves U26): problems/questions = `issue` nodes; not-yet-started work = `feature`/`function` nodes with `wip_status: PLANNED`; `next` flag on both; the Backlog is a graph-wide *view* (open issues OR PLANNED/IN_PROGRESS/BLOCKED OR next), its filter selectable (config default + per-call options) and whatever it excludes printed as a count per component | resolves u26 | active |
 | D34 | Working rules: R-a record, then ask — a question to the user is asked only after the node it concerns is written, citing the node id, and the answer updates that node; R-b plans are nodes — every not-yet-started step is a PLANNED node `part_of` its feature, ordered by `depends_on`, the next one flagged `next` | — | active |
 | D35 | Issue state is stored on the issue node: `issue_status` open | resolves u33 | active |
-| D36 | Integrity-first store: each decision, issue, plan and rule is one entity file written only by graph_tool (validated before saving, sha256-checked); status and edges live only in the graph; registers and other readable documents are generated; adding an entity first lists the existing ones so duplicates are caught. | supersedes d29 | in progress |
+| D36 | Integrity-first store: each decision, issue, plan and rule is one entity file written only by graph_tool (validated before saving, sha256-checked); status and edges live only in the graph; registers and other readable documents are generated; adding an entity first lists the existing ones so duplicates are caught. | supersedes d29 | active |
 | OP1 | — | — | folded into D5 |
 | OP2 | — | — | folded into D10 |
 | OP3 | — | — | folded into D11 |
