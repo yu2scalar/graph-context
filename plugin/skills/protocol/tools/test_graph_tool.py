@@ -99,7 +99,7 @@ def main():
         assert "Excluded by the filter: core: 1" in gt.backlog_md(gt.load(p), owner="user")
         assert "WARNING: no item carries `next`" in gt.backlog_md(gt.load(p))
         rc, _ = _run(gt.cmd_set_next, q(node="p1", off=False)); assert rc == 0 and gt.load(p)["nodes"]["p1"]["next"] is True
-        rows, _, _ = gt.backlog(gt.load(p)); assert rows[0][1] == "p1", rows
+        rows, _, _ = gt.backlog(gt.load(p)); assert rows[0][1] == "p1" and rows[0][2] == "Plan step", rows
         rc, _ = _run(gt.cmd_set_next, q(node="d-002", off=False)); assert rc == 1, "next on a decision must be refused"
         rc, _ = _run(gt.cmd_set_issue, q(node="i2", owner="user", trigger="now")); assert rc == 0 and gt.load(p)["nodes"]["i2"]["trigger"] == "now"
         rc, _ = _run(gt.cmd_set_status, q(node="i2", status="DONE")); assert rc == 1, "set-status on an issue must be refused"

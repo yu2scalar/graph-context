@@ -254,8 +254,8 @@ Purpose: load the full 1-hop / 2-hop neighbourhood and produce the Impact Assess
 |----|------|-------|--------------|-----|
 
 ### Backlog (graph-wide, always shown — D33)
-| kind | id | component | state | owner | trigger / parent | next |
-|------|----|-----------|-------|-------|------------------|------|
+| kind | id | name | component | state | owner | trigger / parent | next |
+|------|----|------|-----------|-------|-------|------------------|------|
 Filter line + excluded counts per component; WARNING when nothing carries `next`.
 
 ### Subgraph

@@ -347,8 +347,12 @@ def component_of(ns, k):
             return component_of(ns, a) if ns[a].get("part_of") or ns[a]["type"] == "component" else a
     return "(none)"
 
+def short(t, n=90):
+    t = t.replace("|", "\\|")
+    return t if len(t) <= n else t[:n - 1] + "…"
+
 def backlog(g, owner=None, next_only=False, component=None, all_=False):
-    """Return (rows, excluded) — rows: (kind, id, component, state, owner, trigger/parent, next); excluded: Counter component -> n."""
+    """Return (rows, excluded, filter) — rows: (kind, id, name, component, state, owner, trigger/parent, next); excluded: Counter component -> n."""
     ns = g["nodes"]; flt = {} if all_ else dict(g["config"].get("backlog_filter", {}))
     if owner: flt["owner"] = owner
     if next_only: flt["next_only"] = True
@@ -365,22 +369,22 @@ def backlog(g, owner=None, next_only=False, component=None, all_=False):
                 keep = True  # a `next` item is never hidden by the owner filter
             if not keep:
                 excluded[comp] += 1; continue
-            rows.append(("issue", k, comp, "open", n.get("owner", "—"), n.get("trigger", "—"), "next" if n.get("next") else ""))
+            rows.append(("issue", k, short(n["name"]), comp, "open", n.get("owner", "—"), n.get("trigger", "—"), "next" if n.get("next") else ""))
         elif n.get("wip_status") in ("PLANNED", "IN_PROGRESS", "BLOCKED") or n.get("next"):
             if flt.get("component") and comp != flt["component"]:
                 excluded[comp] += 1; continue
-            rows.append((n["type"], k, comp, n.get("wip_status", "—"), "—", "part_of " + (n.get("part_of") or ["—"])[0], "next" if n.get("next") else ""))
+            rows.append((n["type"], k, short(n["name"]), comp, n.get("wip_status", "—"), "—", "part_of " + (n.get("part_of") or ["—"])[0], "next" if n.get("next") else ""))
     order = {"next": 0, "": 1}
-    rows.sort(key=lambda r: (order[r[6]], r[0] != "issue", r[2], r[1]))
+    rows.sort(key=lambda r: (order[r[7]], r[0] != "issue", r[3], r[1]))
     return rows, excluded, flt
 
 def backlog_md(g, **kw):
     rows, excluded, flt = backlog(g, **kw)
-    out = [table(["kind", "id", "component", "state", "owner", "trigger / parent", "next"], rows)]
+    out = [table(["kind", "id", "name", "component", "state", "owner", "trigger / parent", "next"], rows)]
     fdesc = ", ".join(f"{k}={v}" for k, v in sorted(flt.items())) or "none (all open issues)"
     out.append(f"Filter: {fdesc}. " + ("Excluded by the filter: " + ", ".join(f"{c}: {n}" for c, n in sorted(excluded.items())) + f" (total {sum(excluded.values())}) — run `backlog --all` to list them."
                                          if excluded else "Excluded by the filter: none."))
-    if not any(r[6] == "next" for r in rows) and not excluded:
+    if not any(r[7] == "next" for r in rows) and not excluded:
         out.append("WARNING: no item carries `next` (D33) — set one with `set-next <node>`.")
     return "\n".join(out)
 
