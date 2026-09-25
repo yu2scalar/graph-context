@@ -84,7 +84,10 @@ def main():
         q = lambda **kw: type("A", (), dict(graph=p, lang="en", **kw))
         def _run(fn, a):
             b = io.StringIO()
-            with contextlib.redirect_stdout(b): rc = fn(gt.load(p), a)
+            try:
+                with contextlib.redirect_stdout(b): rc = fn(gt.load(p), a)
+            except gt.WriteRefused as e:
+                return 1, b.getvalue() + "write refused " + str(e.args[0])
             return rc, b.getvalue()
         rc, out = _run(gt.cmd_add_node, q(id="i2", type="issue", name="I2", part_of="f", doc=None, code=None, source_ref=None, status=None, next=False, owner="claude", trigger="after step 2"))
         assert rc == 0 and gt.load(p)["nodes"]["i2"]["issue_status"] == "open", out
@@ -110,6 +113,35 @@ def main():
         rows, _, _ = gt.backlog(g8); assert not [r for r in rows if r[0] == "issue"], rows
         bad = json.loads(json.dumps(g8)); bad["nodes"]["tbd-01"]["issue_status"] = "open"
         problems, _ = gt.validate(bad, want_schema=False); assert any("must be resolved" in x for x in problems), problems
+        # plan integrity-store: validate-before-save (U31), add with P4, entity hash (P2), append, views (P3)
+        before = open(p).read()
+        rc, out = _run(gt.cmd_add_edge, q(src="d-002", kind="resolves", dst="f"))
+        assert rc == 1 and "write refused" in out and open(p).read() == before, "invalid write must leave the graph untouched"
+        sec = ["Statement=Fold hides nodes", "Public summary=Fold hides", "User's words=「隠す」", "Reason=keep history", "Date=2026-09-25"]
+        A = dict(id="d-003", type="decision", name="Fold hides", part_of="f", source_ref=None, status=None, owner=None, trigger=None, section=sec, new_not_duplicate=None, duplicate_of=None)
+        rc, out = _run(gt.cmd_add, q(**A))
+        assert rc == 1 and "NOT WRITTEN" in out and "d-002" in out and not os.path.exists("docs/entities/d-003.md"), out
+        rc, out = _run(gt.cmd_add, q(**dict(A, section=sec[:2], new_not_duplicate="x")))
+        assert rc == 1 and "needs sections" in out, out
+        rc, out = _run(gt.cmd_add, q(**dict(A, new_not_duplicate="differs from d-002: hide vs fold")))
+        g9 = gt.load(p); f3 = "docs/entities/d-003.md"
+        assert rc == 0 and g9["nodes"]["d-003"]["file"] == f3 and g9["nodes"]["d-003"]["sha256"] == gt.sha256_of(f3), out
+        assert "P4-outcome=new-not-duplicate" in open(".context/graph_tool.log").read() if os.path.exists(".context/graph_tool.log") else True
+        rc, out = _run(gt.cmd_append, q(node="d-003", text="correction: also issues"))
+        assert rc == 0 and "correction: also issues" in open(f3).read() and gt.load(p)["nodes"]["d-003"]["sha256"] == gt.sha256_of(f3), out
+        open(f3, "a").write("hand edit\n")
+        probs, _ = gt.validate(gt.load(p), want_schema=False); assert any("changed outside graph_tool" in x for x in probs), probs
+        rc, out = _run(gt.cmd_append, q(node="d-003", text="more")); assert rc == 1, "append must refuse a hand-edited file"
+        txt = open(f3).read(); open(f3, "w").write(txt.replace("hand edit\n", ""))
+        probs, _ = gt.validate(gt.load(p), want_schema=False); assert not [x for x in probs if "d-003" in x], probs
+        g10 = gt.load(p); g10["config"]["views"] = [{"kind": "decisions", "path": "docs/views/decisions.md"}, {"kind": "public-decisions", "path": "docs/views/public.md"}]; gt.save(p, g10)
+        rc, out = _run(gt.cmd_render, q(check=False)); assert rc == 0 and os.path.exists("docs/views/public.md"), out
+        assert "| D-001 |" not in open("docs/views/public.md").read() and "Fold hides" in open("docs/views/public.md").read(), "public view lists migrated decisions only"
+        rc, out = _run(gt.cmd_set_next, q(node="p1", off=True)); assert rc == 0
+        rc, out = _run(gt.cmd_render, q(check=True)); assert rc == 0, "views are re-rendered on every accepted write: " + out
+        open("docs/views/decisions.md", "a").write("hand\n")
+        rc, out = _run(gt.cmd_render, q(check=True)); assert rc == 1 and "DRIFT" in out, out
+        probs, _ = gt.validate(gt.load(p), want_schema=False, drift=True)
         print("test_graph_tool: all assertions hold")
     except AssertionError as e:
         ok = False; print("FAIL:", e)

@@ -14,6 +14,9 @@
 | `fold <victim> <survivor>` | yes | fold a superseded decision / resolved issue into the survivor, then validate |
 | `split <node> <child>=<id,id> …` | yes | create `function` children under a feature and move attachments, then validate |
 | `set-status <node> <PLANNED\|IN_PROGRESS\|BLOCKED\|DONE\|none>` | yes | change `wip_status` (not on issues), then validate |
+| `add <id> <decision\|issue\|plan\|rule> "<name>" --section 'Heading=text' … (--new-not-duplicate "<why>" \| --duplicate-of <id>)` | yes | search before add (P4): lists every existing entity of that type + similarity top 5; writes nothing until the outcome is stated; then creates `docs/entities/<id>.md` (fixed headings, Log last) and the node (`file`, `sha256`) together |
+| `append <id> "<text>"` | yes | entity files are append-only: adds a dated line under `## Log`; refuses when the file was edited outside the tool |
+| `render [--check]` | views | writes / checks every `config.views` document (decisions, public-decisions, issues, current, plans); views are also re-rendered on every accepted write |
 | `backlog [--owner user\|claude] [--next-only] [--component C] [--all]` | no | graph-wide Backlog view (D33): open issues (default filter = `config.backlog_filter`), all PLANNED / IN_PROGRESS / BLOCKED / `next` nodes; issues the filter hides are counted per component; warns when nothing carries `next`. The same table is printed in `hydrate` |
 | `set-next <node> [--off]` | yes | set / clear `next` (not on component / decision), then validate |
 | `set-issue <issue> [--owner user\|claude] [--trigger TEXT]` | yes | set who resolves an issue and when, then validate |
@@ -32,7 +35,7 @@ graph md5 is unchanged → `WARN` with a diagnosis (HEAD moved, or a docs/code p
 as the very last step. A hand-typed `Generated:` header → `WARN`.
 
 `--lang ja|en` may be given before or after the sub-command; the default is `config.interaction_language`.
-Every write appends a line to `graph_tool.log` next to the handover file (session history for handover §6).
+Every write is validated **before** it is saved; an invalid write is refused and nothing is written (U31). Every write appends a line to `graph_tool.log` next to the handover file (session history for handover §6).
 Every run ends with a footer `<!-- graph_tool <cmd> @<git head> graph md5 <before>[ -> <after> (WRITTEN)] -->`,
 so a pasted block can be traced to a graph state and read-only commands can be seen not to have written.
 Timestamps are seconds-precision and compared as datetimes (git commit time for tracked paths, mtime otherwise).

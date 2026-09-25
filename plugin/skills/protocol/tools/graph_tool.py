@@ -71,6 +71,20 @@ def save(path, g):
         json.dump(g, f, indent=2, ensure_ascii=False)
         f.write("\n")
 
+class WriteRefused(Exception):
+    """Raised by guarded_save: the graph would be invalid, nothing was written (U31, plan integrity-store P2)."""
+
+def guarded_save(path, g):
+    """Validate first, save only when valid (R1 + schema + entity hashes + view drift)."""
+    problems, _ = validate(g, drift=False)
+    if problems:
+        raise WriteRefused(problems)
+    save(path, g)
+    for v in g.get("config", {}).get("views", []):  # P3: views are regenerated on every accepted write, never by hand
+        want = render_view(g, v["kind"])
+        if not os.path.exists(v["path"]) or open(v["path"], encoding="utf-8").read() != want:
+            os.makedirs(os.path.dirname(v["path"]) or ".", exist_ok=True); open(v["path"], "w", encoding="utf-8").write(want)
+
 def now_iso():
     return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
 
@@ -192,7 +206,7 @@ def newest(paths):
     return best
 
 # ---------------------------------------------------------------- validate (R1)
-def validate(g, want_schema=True):
+def validate(g, want_schema=True, drift=True):
     problems, warnings = [], []
     for key in ("current_node", "nodes", "config"):
         if key not in g:
@@ -252,6 +266,16 @@ def validate(g, want_schema=True):
                     problems.append(f"{k}: code_target `{c}` outside component roots")
         if n["type"] in ("decision", "issue") and not n.get("part_of") and not n.get("affects"):
             warnings.append(f"{k}: {n['type']} attached to nothing (R5)")
+        if n.get("file"):
+            f = n["file"]
+            if not os.path.exists(f):
+                problems.append(f"{k}: entity file missing `{f}`")
+            else:
+                if n.get("sha256") and sha256_of(f) != n["sha256"]:
+                    problems.append(f"{k}: entity file `{f}` changed outside graph_tool (sha256 mismatch) — P2; restore it or record the change with `append`")
+                missing = [h for h in HEADINGS.get(n["type"], []) + ["Log"] if h not in entity_sections(f)]
+                if missing: problems.append(f"{k}: entity file `{f}` lacks sections {missing}")
+    problems += view_drift(g) if (want_schema and drift) else []
     return problems, warnings
 
 # ---------------------------------------------------------------- content staleness (D24)
@@ -333,6 +357,139 @@ def fold_candidates(g):
         if n["type"] == "issue" and all(e == "resolves" for _, e in ins[k]):
             out.append((k, ins[k][0][0], "resolved, no other live in-edges"))
     return out
+
+# ---------------------------------------------------------------- entities (plan integrity-store P1–P5)
+ENTITY_TYPES = ("decision", "issue", "plan", "rule")
+ENTITY_DIR = "docs/entities"
+HEADINGS = {  # required sections per entity type, in order; "Log" is always last and append-only
+    "decision": ["Statement", "Public summary", "User's words", "Reason", "Date"],
+    "issue": ["Text", "Source"],
+    "plan": ["Goal", "Approval"],
+    "rule": ["Statement", "Source"],
+}
+ENTITY_MARK = "<!-- entity {id} · {type} · written by graph_tool; do not edit by hand — use `graph_tool.py append` -->"
+
+def sha256_of(path):
+    return hashlib.sha256(open(path, "rb").read()).hexdigest()
+
+def entity_sections(path):
+    """Parse an entity file into {heading: text}."""
+    out, cur = {}, None
+    for line in open(path, encoding="utf-8").read().splitlines():
+        m = re.match(r"^## (.+?)\s*$", line)
+        if m: cur = m.group(1); out[cur] = []; continue
+        if cur is not None: out[cur].append(line)
+    return {k: "\n".join(v).strip() for k, v in out.items()}
+
+def render_entity(nid, ntype, title, sections, when):
+    lines = [ENTITY_MARK.format(id=nid, type=ntype), f"# {nid} — {title}", ""]
+    for h in HEADINGS[ntype]:
+        lines += [f"## {h}", sections[h].strip(), ""]
+    for h, t in sections.items():
+        if h not in HEADINGS[ntype] and h != "Log":
+            lines += [f"## {h}", t.strip(), ""]
+    lines += ["## Log", f"- {when} created by graph_tool", ""]
+    return "\n".join(lines)
+
+def entity_text(ns, k):
+    n = ns[k]
+    if n.get("file") and os.path.exists(n["file"]):
+        sec = entity_sections(n["file"])
+        return " ".join(v for h, v in sec.items() if h != "Log")
+    return ""
+
+def tokens(t):
+    t = t.lower()
+    words = set(w for w in re.findall(r"[a-z0-9_]{3,}", t))
+    cjk = re.sub(r"[^\u3040-\u30ff\u4e00-\u9fff]", "", t)
+    return words | {cjk[i:i + 2] for i in range(len(cjk) - 1)}
+
+def candidates(ns, ntype, text, k=5):
+    """P4: every live entity of the same type + the top-k by token overlap (Jaccard)."""
+    q = tokens(text); same = []
+    for nid, n in sorted(ns.items()):
+        if n["type"] != ntype:
+            continue
+        t = tokens(nid + " " + n["name"] + " " + entity_text(ns, nid))
+        score = len(q & t) / len(q | t) if q | t else 0.0
+        same.append((score, nid, n["name"]))
+    top = sorted(same, reverse=True)[:k]
+    return same, top
+
+# ---------------------------------------------------------------- views (P3: documents people read are generated)
+VIEW_KINDS = ("decisions", "public-decisions", "issues", "current", "plans")
+VIEW_MARK = "<!-- generated by graph_tool render ({kind}) from dependency_graph.json + docs/entities — do not edit -->"
+
+def first_line(t):
+    t = (t or "").strip()
+    return t.splitlines()[0] if t else "—"
+
+def folded_into(ns, k):
+    for j, m in ns.items():
+        if k in m.get("supersedes", []) and ns[k].get("wip_status") == "folded":
+            return j
+    return None
+
+def decision_status(ns, k):
+    n = ns[k]; st = n.get("wip_status")
+    if st == "PLANNED": return "decided, not yet implemented"
+    if st == "IN_PROGRESS": return "in progress"
+    if st == "BLOCKED": return "blocked"
+    return "active"
+
+def render_view(g, kind):
+    ns = g["nodes"]; out = [VIEW_MARK.format(kind=kind), ""]
+    sec = lambda k: entity_sections(ns[k]["file"]) if ns[k].get("file") and os.path.exists(ns[k]["file"]) else {}
+    rel = lambda k: "; ".join(x for x in (("supersedes " + ", ".join(ns[k]["supersedes"])) if ns[k].get("supersedes") else "",
+                                          ("resolves " + ", ".join(ns[k]["resolves"])) if ns[k].get("resolves") else "") if x) or "—"
+    ref = lambda k: ns[k].get("source_ref", k)
+    decs = sorted((k for k, n in ns.items() if n["type"] == "decision"), key=lambda k: (re.sub(r"\d", "", ref(k)), int(re.sub(r"\D", "", ref(k)) or 0)))
+    if kind == "decisions":
+        out += ["# Decision register (generated)", "", "| id | decision | supersedes / resolves | status | entity |", "|---|---|---|---|---|"]
+        for k in decs:
+            out.append(f"| {ref(k)} | {first_line(sec(k).get('Statement')) if sec(k) else ns[k]['name']} | {rel(k)} | {decision_status(ns, k)} | {ns[k].get('file', '(no entity file yet)')} |")
+    elif kind == "public-decisions":
+        out += ["# Public decision register (generated from each decision's Public summary)", "", "| id | Decision | Supersedes / resolves | Status |", "|----|----------|-----------------------|--------|"]
+        for k in decs:
+            s_ = sec(k)
+            if not s_: continue  # not migrated yet: nothing public to show
+            out.append(f"| {ref(k)} | {first_line(s_.get('Public summary'))} | {rel(k)} | {decision_status(ns, k)} |")
+    elif kind == "issues":
+        out += ["# Issue register (generated)", "", "| id | issue | status | owner | trigger | closed_by | attached to |", "|---|---|---|---|---|---|---|"]
+        iss = sorted((k for k, n in ns.items() if n["type"] == "issue"), key=lambda k: int(re.sub(r"\D", "", ref(k)) or 0))
+        for k in iss:
+            n = ns[k]; txt = first_line(sec(k).get("Text")) if sec(k) else n["name"]
+            out.append(f"| {ref(k)} | {txt} | {n.get('issue_status', '—')} | {n.get('owner', '—')} | {n.get('trigger', '—')} | {n.get('closed_by', '—')} | {(n.get('part_of') or ['—'])[0]} |")
+    elif kind == "current":
+        out += ["# Current specification (generated: active decisions per node)", ""]
+        by = defaultdict(list)
+        for k in decs:
+            if ns[k].get("wip_status") != "folded": by[(ns[k].get("part_of") or ["(unattached)"])[0]].append(k)
+        for parent in sorted(by):
+            out += [f"## {parent}", ""]
+            for k in by[parent]:
+                out.append(f"- **{ref(k)}** ({decision_status(ns, k)}): {first_line(sec(k).get('Statement')) if sec(k) else ns[k]['name']}")
+            out.append("")
+    elif kind == "plans":
+        out += ["# Plans (generated: goal, steps, decisions)", ""]
+        for k in sorted(x for x, n in ns.items() if n["type"] == "plan"):
+            s_ = sec(k); out += [f"## {k} — {ns[k]['name']} ({ns[k].get('wip_status', '—')})", "", f"Goal: {first_line(s_.get('Goal'))}", f"Approval: {first_line(s_.get('Approval'))}", ""]
+            kids = sorted(j for j, m in ns.items() if m.get("part_of") == [k])
+            for j in kids:
+                m = ns[j]; mark = " (next)" if m.get("next") else ""
+                out.append(f"- {m['type']} `{j}`: {m['name']} — {m.get('wip_status') or m.get('issue_status') or '—'}{mark}")
+            out.append("")
+    return "\n".join(out).rstrip() + "\n"
+
+def view_drift(g):
+    probs = []
+    for v in g.get("config", {}).get("views", []):
+        want = render_view(g, v["kind"])
+        if not os.path.exists(v["path"]):
+            probs.append(f"view `{v['path']}` ({v['kind']}) missing — run `render`")
+        elif open(v["path"], encoding="utf-8").read() != want:
+            probs.append(f"view `{v['path']}` ({v['kind']}) differs from a fresh render — edited by hand or stale; run `render`")
+    return probs
 
 # ---------------------------------------------------------------- backlog (D33)
 def component_of(ns, k):
@@ -495,7 +652,7 @@ def cmd_hydrate(g, args):
     if getattr(args, "dry_run", False):
         print("\n(dry-run: current_node not written)")
     else:
-        old = g.get("current_node"); b4 = md5(args.graph); g["current_node"] = origin; save(args.graph, g); log_op(g, f"hydrate {origin} (current_node {old} -> {origin})", args.graph, b4)
+        old = g.get("current_node"); b4 = md5(args.graph); g["current_node"] = origin; guarded_save(args.graph, g); log_op(g, f"hydrate {origin} (current_node {old} -> {origin})", args.graph, b4)
         print(f"\n(current_node written: `{origin}`)")
     return 0
 
@@ -723,7 +880,7 @@ def cmd_add_path(g, args):
     if not os.path.exists(args.path): print(f"ERROR: path `{args.path}` does not exist"); return 1
     lst = ns[args.node].setdefault(field, [])
     if args.path not in lst: lst.append(args.path)
-    b4 = md5(args.graph); save(args.graph, g); log_op(g, f"{args.cmd} {args.node} {args.path}", args.graph, b4)
+    b4 = md5(args.graph); guarded_save(args.graph, g); log_op(g, f"{args.cmd} {args.node} {args.path}", args.graph, b4)
     print(f"{args.node}.{field} += {args.path}")
     return cmd_validate(g, args)
 
@@ -746,7 +903,7 @@ def cmd_add_node(g, args):
     elif getattr(args, "owner", None) or getattr(args, "trigger", None):
         print("ERROR: --owner / --trigger are for issue nodes only"); return 1
     ns[args.id] = n
-    b4 = md5(args.graph); save(args.graph, g); log_op(g, f"add-node {args.id} ({args.type}) part_of={args.part_of}", args.graph, b4)
+    b4 = md5(args.graph); guarded_save(args.graph, g); log_op(g, f"add-node {args.id} ({args.type}) part_of={args.part_of}", args.graph, b4)
     print(f"added `{args.id}` ({args.type})")
     return cmd_validate(g, args)
 
@@ -771,7 +928,7 @@ def cmd_fold(g, args):
                 n[e] = [t for t in n[e] if t != v]
                 if not n[e]: del n[e]
     if g.get("current_node") == v: g["current_node"] = s
-    b4 = md5(args.graph); save(args.graph, g); log_op(g, f"fold {v} -> {s}; {s}.folded={sur['folded']}", args.graph, b4)
+    b4 = md5(args.graph); guarded_save(args.graph, g); log_op(g, f"fold {v} -> {s}; {s}.folded={sur['folded']}", args.graph, b4)
     print(f"folded `{v}` into `{s}`; {s}.folded = {sur['folded']}")
     return cmd_validate(g, args)
 
@@ -789,7 +946,7 @@ def cmd_split(g, args):
             ns[i]["part_of"] = [child]
             ns[i]["affects"] = [child if a == parent else a for a in ns[i].get("affects", [])]
         print(f"created function `{child}` under `{parent}` with {len(ids)} attachments; fill name/code_targets by hand")
-    b4 = md5(args.graph); save(args.graph, g)
+    b4 = md5(args.graph); guarded_save(args.graph, g)
     for spec in args.children:
         log_op(g, f"split {parent} -> {spec}", args.graph, b4)
     return cmd_validate(g, args)
@@ -802,7 +959,7 @@ def cmd_set_status(g, args):
     old = ns[args.node].get("wip_status")
     if args.status == "none": ns[args.node].pop("wip_status", None)
     else: ns[args.node]["wip_status"] = args.status
-    b4 = md5(args.graph); save(args.graph, g); log_op(g, f"set-status {args.node} {old} -> {args.status}", args.graph, b4)
+    b4 = md5(args.graph); guarded_save(args.graph, g); log_op(g, f"set-status {args.node} {old} -> {args.status}", args.graph, b4)
     print(f"{args.node}.wip_status: {old} -> {args.status}")
     return cmd_validate(g, args)
 
@@ -813,7 +970,7 @@ def cmd_add_edge(g, args):
         if x not in ns: print(f"ERROR: `{x}` not in nodes"); return 1
     lst = ns[args.src].setdefault(args.kind, [])
     if args.dst not in lst: lst.append(args.dst)
-    b4 = md5(args.graph); save(args.graph, g); log_op(g, f"add-edge {args.src}.{args.kind} -> {args.dst}", args.graph, b4)
+    b4 = md5(args.graph); guarded_save(args.graph, g); log_op(g, f"add-edge {args.src}.{args.kind} -> {args.dst}", args.graph, b4)
     print(f"added {args.src}.{args.kind} -> {args.dst}")
     return cmd_validate(g, args)
 
@@ -821,9 +978,86 @@ def cmd_set_current(g, args):
     ns = g["nodes"]; v = None if args.node == "null" else args.node
     if v is not None and v not in ns: print(f"ERROR: `{v}` not in nodes"); return 1
     old = g.get("current_node"); g["current_node"] = v
-    b4 = md5(args.graph); save(args.graph, g); log_op(g, f"set-current {old} -> {v}", args.graph, b4)
+    b4 = md5(args.graph); guarded_save(args.graph, g); log_op(g, f"set-current {old} -> {v}", args.graph, b4)
     print(f"current_node: {old} -> {v}")
     return cmd_validate(g, args)
+
+def cmd_add(g, args):
+    """P4 + P1: search before add; create the entity file and the node together, validated before anything is saved."""
+    ns = g["nodes"]
+    if args.type not in ENTITY_TYPES: print(f"ERROR: add is for {ENTITY_TYPES}; use add-node for structure nodes"); return 1
+    if args.id in ns: print(f"ERROR: `{args.id}` exists — use `append {args.id}` to add to it"); return 1
+    if not ID_RE.match(args.id): print(f"ERROR: bad id `{args.id}`"); return 1
+    sections = {}
+    for spec in args.section or []:
+        if "=" not in spec: print(f"ERROR: --section wants Heading=text, got `{spec[:40]}`"); return 1
+        h, t = spec.split("=", 1); sections[h.strip()] = t
+    missing = [h for h in HEADINGS[args.type] if not sections.get(h, "").strip()]
+    if missing: print(f"ERROR: {args.type} needs sections {missing} (--section 'Heading=text')"); return 1
+    same, top = candidates(ns, args.type, args.name + " " + " ".join(sections.values()))
+    print(f"## search before add (P4) — {len(same)} existing {args.type} entities")
+    print(table(["similarity", "id", "name"], [(f"{sc:.2f}", i, nm) for sc, i, nm in top]))
+    print("All existing (read them before declaring the new entity distinct):")
+    for sc, i, nm in same: print(f"- {i}: {nm}")
+    if not (args.new_not_duplicate or args.duplicate_of):
+        print("\nNOT WRITTEN: state the outcome — `--new-not-duplicate \"<why it differs from the list>\"` or `--duplicate-of <id>` (then use append)."); return 1
+    if args.duplicate_of:
+        print(f"\nNOT WRITTEN: duplicate of `{args.duplicate_of}` — add to it with `append {args.duplicate_of}`."); return 1
+    path = os.path.join(ENTITY_DIR, f"{args.id}.md")
+    if os.path.exists(path): print(f"ERROR: `{path}` already exists"); return 1
+    os.makedirs(ENTITY_DIR, exist_ok=True)
+    open(path, "w", encoding="utf-8").write(render_entity(args.id, args.type, args.name, sections, now_iso()))
+    n = {"id": args.id, "type": args.type, "name": args.name, "docs": [], "code_targets": [], "file": path, "sha256": sha256_of(path)}
+    if args.part_of: n["part_of"] = [args.part_of]
+    if args.source_ref: n["source_ref"] = args.source_ref
+    if args.status: n["wip_status"] = args.status
+    if args.type == "issue":
+        n["issue_status"] = "open"
+        if args.owner: n["owner"] = args.owner
+        if args.trigger: n["trigger"] = args.trigger
+    ns[args.id] = n
+    b4 = md5(args.graph)
+    try:
+        guarded_save(args.graph, g)
+    except WriteRefused:
+        os.remove(path); raise
+    log_op(g, f"add {args.id} ({args.type}) file={path} P4-outcome=new-not-duplicate: {args.new_not_duplicate}", args.graph, b4)
+    print(f"added `{args.id}` ({args.type}) with {path}")
+    return cmd_validate(g, args)
+
+def cmd_append(g, args):
+    """Entity files are append-only: add a dated line under Log (corrections, status notes, later user words)."""
+    ns = g["nodes"]
+    if args.node not in ns or not ns[args.node].get("file"): print(f"ERROR: `{args.node}` has no entity file"); return 1
+    n = ns[args.node]; f = n["file"]
+    if sha256_of(f) != n.get("sha256"): print(f"ERROR: `{f}` was changed outside graph_tool; resolve that first (validate shows it)"); return 1
+    old = open(f, encoding="utf-8").read()
+    new = old.rstrip("\n") + f"\n- {now_iso()} {args.text}\n"
+    open(f, "w", encoding="utf-8").write(new); n["sha256"] = sha256_of(f)
+    b4 = md5(args.graph)
+    try:
+        guarded_save(args.graph, g)
+    except WriteRefused:
+        open(f, "w", encoding="utf-8").write(old); raise
+    log_op(g, f"append {args.node}: {args.text[:120]}", args.graph, b4)
+    print(f"appended to {f}")
+    return cmd_validate(g, args)
+
+def cmd_render(g, args):
+    views = g.get("config", {}).get("views", [])
+    if not views: print("No config.views defined — nothing to render."); return 0
+    rows = []
+    for v in views:
+        want = render_view(g, v["kind"]); cur = open(v["path"], encoding="utf-8").read() if os.path.exists(v["path"]) else None
+        if args.check:
+            rows.append((v["path"], v["kind"], "OK" if cur == want else "DRIFT"))
+        else:
+            if cur != want:
+                os.makedirs(os.path.dirname(v["path"]) or ".", exist_ok=True); open(v["path"], "w", encoding="utf-8").write(want)
+            rows.append((v["path"], v["kind"], "unchanged" if cur == want else "written"))
+    print("## render" + (" --check" if args.check else "")); print(table(["path", "kind", "result"], rows))
+    if not args.check and any(r[2] == "written" for r in rows): log_op(g, "render " + ", ".join(r[0] for r in rows if r[2] == "written"), args.graph, md5(args.graph))
+    bad = any(r[2] == "DRIFT" for r in rows); print("RESULT:", "FAIL" if bad else "OK"); return 1 if bad else 0
 
 def cmd_backlog(g, args):
     print("## Backlog (D33)")
@@ -836,7 +1070,7 @@ def cmd_set_next(g, args):
     if ns[args.node]["type"] in ("component", "decision"): print("ERROR: `next` is not allowed on component / decision nodes"); return 1
     if args.off: ns[args.node].pop("next", None)
     else: ns[args.node]["next"] = True
-    b4 = md5(args.graph); save(args.graph, g); log_op(g, f"set-next {args.node} {'off' if args.off else 'on'}", args.graph, b4)
+    b4 = md5(args.graph); guarded_save(args.graph, g); log_op(g, f"set-next {args.node} {'off' if args.off else 'on'}", args.graph, b4)
     print(f"{args.node}.next: {'cleared' if args.off else 'true'}")
     return cmd_validate(g, args)
 
@@ -847,7 +1081,7 @@ def cmd_set_issue(g, args):
     n = ns[args.node]; ch = []
     if args.owner: ch.append(f"owner {n.get('owner')} -> {args.owner}"); n["owner"] = args.owner
     if args.trigger: ch.append(f"trigger -> {args.trigger!r}"); n["trigger"] = args.trigger
-    b4 = md5(args.graph); save(args.graph, g); log_op(g, f"set-issue {args.node} " + "; ".join(ch), args.graph, b4)
+    b4 = md5(args.graph); guarded_save(args.graph, g); log_op(g, f"set-issue {args.node} " + "; ".join(ch), args.graph, b4)
     print(f"{args.node}: " + "; ".join(ch))
     return cmd_validate(g, args)
 
@@ -866,7 +1100,7 @@ def cmd_close(g, args):
     if dec:
         lst = ns[dec].setdefault("resolves", [])
         if args.node not in lst: lst.append(args.node)
-    b4 = md5(args.graph); save(args.graph, g)
+    b4 = md5(args.graph); guarded_save(args.graph, g)
     log_op(g, f"close {args.node} {old} -> {args.state} by {n['closed_by']}" + (f"; {dec}.resolves += {args.node}" if dec else ""), args.graph, b4)
     print(f"{args.node}: {old} -> {args.state} (closed_by {n['closed_by']})" + (f"; added {dec}.resolves -> {args.node}" if dec else ""))
     return cmd_validate(g, args)
@@ -891,6 +1125,11 @@ def main(argv=None):
     p = sp("set-next", "node"); p.add_argument("--off", action="store_true")
     p = sp("set-issue", "node"); p.add_argument("--owner", choices=["user", "claude"]); p.add_argument("--trigger")
     p = sp("close", "node", "state"); p.add_argument("--by", required=True)
+    p = sp("add", "id", "type", "name"); p.add_argument("--part-of", dest="part_of"); p.add_argument("--source-ref", dest="source_ref"); p.add_argument("--status")
+    p.add_argument("--owner", choices=["user", "claude"]); p.add_argument("--trigger"); p.add_argument("--section", action="append")
+    p.add_argument("--new-not-duplicate", dest="new_not_duplicate"); p.add_argument("--duplicate-of", dest="duplicate_of")
+    p = sp("append", "node", "text")
+    p = sp("render"); p.add_argument("--check", action="store_true")
     for name, a in ap._subparsers._group_actions[0].choices.items():
         if name == "handover-tables": a.add_argument("--verify", default=None, metavar="HANDOVER_MD")
         if name == "hydrate": a.add_argument("--dry-run", dest="dry_run", action="store_true")
@@ -901,11 +1140,16 @@ def main(argv=None):
     args.lang = args.lang_sub or args.lang or g.get("config", {}).get("interaction_language", "en")
     if args.lang not in ("en", "ja"): args.lang = "en"
     before = md5(args.graph)
-    rc = {"validate": cmd_validate, "hydrate": cmd_hydrate, "check": cmd_check, "handover-tables": cmd_handover_tables,
+    try:
+      rc = {"validate": cmd_validate, "hydrate": cmd_hydrate, "check": cmd_check, "handover-tables": cmd_handover_tables,
           "fold": cmd_fold, "split": cmd_split, "set-status": cmd_set_status, "add-edge": cmd_add_edge, "set-current": cmd_set_current,
           "add-node": cmd_add_node, "lint-prose": cmd_lint_prose, "lint-handover": cmd_lint_handover,
           "add-doc": cmd_add_path, "add-code": cmd_add_path, "backlog": cmd_backlog, "set-next": cmd_set_next,
-          "set-issue": cmd_set_issue, "close": cmd_close}[args.cmd](g, args)
+          "set-issue": cmd_set_issue, "close": cmd_close, "add": cmd_add, "append": cmd_append, "render": cmd_render}[args.cmd](g, args)
+    except WriteRefused as e:
+        print("## write refused — the graph would be invalid; nothing was written (U31)")
+        print(table(["severity", "finding"], [("error", p) for p in e.args[0]]))
+        print("RESULT: FAIL"); rc = 1
     after = md5(args.graph)
     print(f"\n<!-- graph_tool {args.cmd} @{git_head()} graph md5 {before}" + (f" -> {after} (WRITTEN)" if after != before else " (unchanged)") + " -->")
     return rc
