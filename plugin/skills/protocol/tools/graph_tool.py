@@ -1138,8 +1138,68 @@ def migrate_sections(g, k, rows):
         if len(texts) > 1: differ = [f"{f}:{i}" for f, i, _ in copies]
     return sec, differ
 
+def append_section(path, heading, text):
+    """Add a new section before `## Log` (content is only ever added, never changed)."""
+    t = open(path, encoding="utf-8").read(); i = t.rfind("\n## Log")
+    open(path, "w", encoding="utf-8").write(t[:i] + f"\n## {heading}\n{text.rstrip()}\n" + t[i:])
+
+def demote(doc):
+    """Plan document body inside an entity: every heading two levels deeper, so it cannot collide with entity sections."""
+    return "\n".join(("##" + l) if re.match(r"^#{1,4} ", l) else l for l in doc.splitlines())
+
+def migrate_plans(g, args):
+    import glob
+    ns = g["nodes"]; pats = g["config"].get("plan_docs", ["docs/plan-*.md", "docs/apply-*.md"])
+    docs = sorted({f for p_ in pats for f in glob.glob(p_)})
+    report, moved = [], []
+    for d in docs:
+        users = sorted(k for k, n in ns.items() if d in n.get("docs", []))
+        owners = [k for k in users if ns[k]["type"] == "plan" and ns[k].get("file")]
+        body = open(d, encoding="utf-8").read()
+        m = re.search(r"^# (.+)$", body, re.M); title = m.group(1).strip() if m else os.path.basename(d)
+        if len(owners) == 1:
+            target = owners[0]; how = f"added as section to existing plan `{target}`"
+        else:
+            target = re.sub(r"[^a-z0-9_-]", "-", os.path.splitext(os.path.basename(d))[0].lower())
+            how = "new plan entity"
+        report.append((d, target, how, len(users)))
+        if args.dry_run: continue
+        if how == "new plan entity":
+            if target in ns: print(f"ERROR: node `{target}` exists"); return 1
+            comps = Counter(component_of(ns, k) for k in users)
+            part = sorted(comps.items(), key=lambda x: (-x[1], x[0]))[0][0] if comps else None
+            path = os.path.join(ENTITY_DIR, f"{target}.md")
+            sec = {"Goal": NOT_RECORDED + " — see Document", "Approval": NOT_RECORDED + " — see Document",
+                   "Document": f"(moved verbatim from `{d}` by `migrate --plans`; headings demoted two levels)\n\n" + demote(body)}
+            open(path, "w", encoding="utf-8").write(render_entity(target, "plan", title, sec, now_iso(), how="migrate --plans"))
+            n = {"id": target, "type": "plan", "name": title, "docs": [], "code_targets": [], "file": path, "sha256": sha256_of(path)}
+            if part and part in ns: n["part_of"] = [part]
+            ns[target] = n
+        else:
+            path = ns[target]["file"]
+            append_section(path, f"Document (moved from {d})", demote(body)); ns[target]["sha256"] = sha256_of(path)
+        for k in users:
+            ns[k]["docs"] = [path if x == d else x for x in ns[k]["docs"]]
+            if ns[k]["docs"].count(path) > 1: ns[k]["docs"] = list(dict.fromkeys(ns[k]["docs"]))
+            if k == target: ns[k]["docs"] = [x for x in ns[k]["docs"] if x != path]
+        for r in g["config"].get("registries", []):
+            if r["file"] == d: r["file"] = path
+        moved.append(d)
+    print("## migrate --plans" + (" --dry-run" if args.dry_run else ""))
+    print(table(["document", "plan node", "how", "nodes referring to it"], report))
+    if args.dry_run: return 0
+    for d in moved: os.remove(d)
+    b4 = md5(args.graph)
+    try:
+        guarded_save(args.graph, g)
+    except WriteRefused:
+        print("write refused: restore the documents with `git checkout -- " + " ".join(moved) + "` and the entity files with git"); raise
+    log_op(g, f"migrate --plans: {len(moved)} plan documents moved into plan entities: " + ", ".join(moved), args.graph, b4)
+    return cmd_validate(g, args)
+
 def cmd_migrate(g, args):
     """Give every node without an entity file its file, mechanically and reproducibly (no judgment, no paraphrase)."""
+    if getattr(args, "plans", False): return migrate_plans(g, args)
     ns = g["nodes"]; rows = scan_rows(g); todo = sorted(k for k, n in ns.items() if not n.get("file"))
     report, written = [], []
     for k in todo:
@@ -1287,7 +1347,7 @@ def main(argv=None):
     p = sp("append", "node", "text")
     p = sp("attach", "node"); p.add_argument("--section", action="append"); p.add_argument("--as-plan", dest="as_plan", action="store_true")
     p = sp("render"); p.add_argument("--check", action="store_true")
-    p = sp("migrate"); p.add_argument("--dry-run", dest="dry_run", action="store_true")
+    p = sp("migrate"); p.add_argument("--dry-run", dest="dry_run", action="store_true"); p.add_argument("--plans", action="store_true")
     p = sp("rename", "node", "name")
     for name, a in ap._subparsers._group_actions[0].choices.items():
         if name == "handover-tables": a.add_argument("--verify", default=None, metavar="HANDOVER_MD")
