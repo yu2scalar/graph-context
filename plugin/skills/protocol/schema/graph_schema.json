@@ -44,7 +44,7 @@
       "enum": ["component", "feature", "function", "decision", "issue", "plan", "rule", "task"]
     },
     "wipStatus": {
-      "description": "PLANNED = not yet started (a plan step, D33 / D34 R-b); IN_PROGRESS; BLOCKED; DONE. Not used on issue nodes (they carry issue_status).",
+      "description": "PLANNED = not yet started (a plan step, D33 / D34 R-b); IN_PROGRESS; BLOCKED; DONE. On decision nodes it is the implementation state: PLANNED = decided, not yet implemented; IN_PROGRESS = being implemented; DONE = implemented (or nothing to implement). Not used on issue nodes (they carry issue_status).",
       "type": "string",
       "enum": ["PLANNED", "IN_PROGRESS", "BLOCKED", "DONE"]
     },

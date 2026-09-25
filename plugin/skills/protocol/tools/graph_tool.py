@@ -375,7 +375,7 @@ HEADINGS = {  # required sections per entity type, in order; "Log" is always las
     "component": ["Summary"], "feature": ["Summary"], "function": ["Summary"], "task": ["Summary"],
 }
 NOT_RECORDED = "(not recorded in the source)"
-ENTITY_MARK = "<!-- entity {id} · {type} · written by graph_tool; do not edit by hand — use `graph_tool.py append` -->"
+ENTITY_MARK = "<!-- entity {id} · {type} · written by graph_tool; do not edit by hand — use `graph_tool.py append` · when a heading appears more than once, the LAST section with that heading is the current one -->"
 
 def sha256_of(path):
     return hashlib.sha256(open(path, "rb").read()).hexdigest()

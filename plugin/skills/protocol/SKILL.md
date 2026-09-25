@@ -88,6 +88,9 @@ registers, `current.md`, plans, the public register) are generated. Therefore:
   that type; read the list, then state `--new-not-duplicate "<why>"` or `--duplicate-of <id>` (then `append`). Duplicates
   written in other words are only caught by that reading.
 - **Correction or later note → `graph_tool.py append <id> "<text>"`** (entity files are append-only); name change → `rename`.
+- **Newer version of a section → `append <id> "<text>" --section <Heading>`.** When a heading appears more than once in an
+  entity file, the **last** section with that heading is the current one (hydrate and views read it that way).
+- **Decision `wip_status` = implementation state**: PLANNED = decided, not yet implemented; IN_PROGRESS; DONE = implemented.
 - **Existing records → `migrate`** (reproducible: registry rows copied verbatim, first matching registry = primary),
   `migrate --plans` (plan documents into plan entities), `migrate --retire-registry <file>` (hand-written register into
   entity logs, then removed).
