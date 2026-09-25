@@ -26,7 +26,7 @@ Deliberately absent: `code_roots` (derived: union of component nodes' `code_targ
 | Field | Required | Type | Definition |
 |-------|----------|------|------------|
 | `id` | yes | `^[a-z0-9][a-z0-9_-]*$` | equals the key in `nodes` |
-| `type` | yes | enum | `component` \| `feature` \| `function` \| `decision` \| `issue` \| `task` (task: manual only, never generated) |
+| `type` | yes | enum | `component` \| `feature` \| `function` \| `decision` \| `issue` \| `plan` \| `rule` \| `task` (plan: what was planned, its steps are nodes `part_of` it; rule: a working rule set by the user; task: manual only, never generated) |
 | `name` | yes | string | human name |
 | `docs` | yes | path[] | documents describing the node; may be empty |
 | `code_targets` | yes | path[] | files/dirs the node owns. component: its root dir(s). others: must fall under some component's roots |
@@ -42,6 +42,8 @@ Deliberately absent: `code_roots` (derived: union of component nodes' `code_targ
 | `issue_status` | issue: yes | enum | `open` \| `resolved` \| `transferred`; issue only |
 | `owner` | no | enum | `user` \| `claude` — who resolves the issue; issue only |
 | `trigger` | no | string | when / on what event the issue is taken up; issue only |
+| `file` | no | path | entity file holding the node's text (`docs/entities/<id>.md`); decision / issue / plan / rule only; written by graph_tool only, append-only |
+| `sha256` | with `file` | hex64 | sha256 of `file` as last written by graph_tool; a mismatch = edited outside the tool |
 | `closed_by` | when not open | string | decision id, commit hash or short action text that closed the issue; issue only |
 
 ## Hierarchy and growth

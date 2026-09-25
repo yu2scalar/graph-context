@@ -92,6 +92,18 @@ bad("non-boolean next rejected", lambda b: b["nodes"]["commit-protocol"].__setit
 bad("backlog_filter OK", lambda b: b["config"].__setitem__("backlog_filter", {"owner": "user", "next_only": False, "component": "core"}), True)
 bad("backlog_filter unknown key rejected", lambda b: b["config"].__setitem__("backlog_filter", {"status": "open"}))
 bad("backlog_filter bad owner rejected", lambda b: b["config"].__setitem__("backlog_filter", {"owner": "team"}))
+# plan integrity-store: plan / rule entities, file + sha256
+PL = {"id": "plan-x", "type": "plan", "name": "Plan X", "docs": [], "code_targets": [], "part_of": ["core"], "wip_status": "IN_PROGRESS", "file": "docs/entities/plan-x.md", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+RU = {"id": "rule-a", "type": "rule", "name": "Rule A", "docs": [], "code_targets": [], "part_of": ["core"], "file": "docs/entities/rule-a.md", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+bad("plan entity with file + sha256 OK", lambda b: b["nodes"].__setitem__("plan-x", dict(PL)), True)
+bad("rule entity OK", lambda b: b["nodes"].__setitem__("rule-a", dict(RU)), True)
+bad("decision with file + sha256 OK", lambda b: b["nodes"]["d-022"].update(file="docs/entities/d-022.md", sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), True)
+bad("file without sha256 rejected", lambda b: b["nodes"].__setitem__("plan-x", {k: v for k, v in PL.items() if k != "sha256"}))
+bad("bad sha256 rejected", lambda b: b["nodes"].__setitem__("plan-x", dict(PL, sha256="xyz")))
+bad("file on feature rejected", lambda b: b["nodes"]["commit-protocol"].update(file="docs/entities/c.md", sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+bad("next on rule rejected", lambda b: b["nodes"].__setitem__("rule-a", dict(RU, next=True)))
+bad("source_ref on plan rejected", lambda b: b["nodes"].__setitem__("plan-x", dict(PL, source_ref="P1")))
+bad("owner on plan rejected", lambda b: b["nodes"].__setitem__("plan-x", dict(PL, owner="user")))
 
 print(f"\n{sum(results)}/{len(results)} fixtures as expected")
 sys.exit(0 if all(results) else 1)

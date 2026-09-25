@@ -45,7 +45,9 @@ component, feature or function. `task` exists for manual use and is never genera
 single-valued), `folded[]` (registry ids absorbed by compaction, decision only), `wip_status`
 (`PLANNED` | `IN_PROGRESS` | `BLOCKED` | `DONE`; not on issues), `next` (bool, the item to take up next;
 not on component/decision). Issue nodes require `issue_status` (`open` | `resolved` | `transferred`) and may
-carry `owner` (`user` | `claude`) and `trigger`; `closed_by` is required when not open (D33).
+carry `owner` (`user` | `claude`) and `trigger`; `closed_by` is required when not open (D33). Types `plan` and `rule`
+and the fields `file` + `sha256` (entity text file, written by graph_tool only) belong to the integrity-first store
+(private plan integrity-store, in progress).
 
 **Edge direction conventions**
 
