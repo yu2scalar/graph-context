@@ -45,7 +45,7 @@ good = {
                    "issue_status": "resolved", "closed_by": "D-022", "owner": "user", "trigger": "before release"},
         "d-022": {"id": "d-022", "type": "decision", "name": "No hardcode", "docs": [], "code_targets": [],
                   "source_ref": "D-022", "part_of": ["core"], "affects": ["commit-protocol", "settle-lazy"],
-                  "resolves": ["tbd-24"], "supersedes": [], "folded": ["D-010", "TBD-03"]}}}
+                  "resolves": ["tbd-24"], "supersedes": []}}}
 
 def bad(label, mutate, expect=False):
     b = copy.deepcopy(good); mutate(b); run(label, b, expect)
@@ -59,7 +59,7 @@ bad("component with part_of rejected", lambda b: b["nodes"]["core"].__setitem__(
 bad("part_of >1 rejected", lambda b: b["nodes"]["commit-protocol"].__setitem__("part_of", ["core", "settler"]))
 bad("source_ref on feature rejected", lambda b: b["nodes"]["commit-protocol"].__setitem__("source_ref", "D-001"))
 bad("resolves on issue rejected", lambda b: b["nodes"]["tbd-24"].__setitem__("resolves", ["d-022"]))
-bad("folded on issue rejected", lambda b: b["nodes"]["tbd-24"].__setitem__("folded", ["D-001"]))
+bad("folded field rejected (dropped, D37)", lambda b: b["nodes"]["d-022"].__setitem__("folded", ["D-001"]))
 bad("supersedes on feature rejected", lambda b: b["nodes"]["commit-protocol"].__setitem__("supersedes", ["d-022"]))
 bad("registry missing file rejected", lambda b: b["config"]["registries"][0].pop("file"))
 bad("registry bad type rejected", lambda b: b["config"]["registries"][0].__setitem__("type", "feature"))

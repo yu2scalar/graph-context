@@ -1332,8 +1332,83 @@ def strip_graph_copies(g, args):
     log_op(g, f"migrate --strip-graph-copies: {len(done)} entity files", args.graph, b4)
     return cmd_validate(g, args)
 
+FOLD_REF = re.compile(r"(?:supersedes|refines)\s+(?:the\s+[\w\s-]*?part\s+of\s+)?([A-Z]+-?\d+)")
+
+def restore_folds(g, args):
+    """D31 / D37: bring back every node an earlier fold deleted, as hidden history, from the verbatim copies in the
+    survivor's Folded section; then drop folded[] and the survivors' Folded sections (they would be second copies)."""
+    ns = g["nodes"]; regs = g["config"].get("registries", [])
+    pub = {r["file"]: r["public_column"] for r in regs if r.get("public_column")}
+    plan, backup = [], {}
+    for sk in sorted(k for k, n in ns.items() if n.get("folded")):
+        sec = entity_sections(ns[sk]["file"]).get("Folded", "") if ns[sk].get("file") else ""
+        for fid in ns[sk]["folded"]:
+            rows = [(m.group(1), m.group(2), m.group(3)) for m in re.finditer(r"^- " + re.escape(fid) + r" `([^`]+):(\d+)`\n  (.+)$", sec, re.M)]
+            reg = next((r for r in regs if re.match(r["id_pattern"], fid)), None)
+            plan.append((sk, fid, reg["type"] if reg else "decision", rows))
+    report = [(fid.lower(), t, sk, len(rows)) for sk, fid, t, rows in plan]
+    print("## migrate --restore-folds" + (" --dry-run" if args.dry_run else ""))
+    print(table(["restored node", "type", "survivor", "copies"], report))
+    missing = [r for r in report if r[3] == 0]
+    if missing: print(f"ERROR: no verbatim copy for {[r[0] for r in missing]} in the survivors' Folded sections"); return 1
+    if args.dry_run: return 0
+    restored = {fid: fid.lower() for _, fid, _, _ in plan}
+    written = []
+    for sk, fid, t, rows in plan:
+        k = fid.lower()
+        if k in ns: print(f"ERROR: node `{k}` exists"); return 1
+        prim = rows[0]; cells = split_cells(prim[2])
+        pubrow = next((r for r in rows if r[0] in pub), None)
+        pubtxt = split_cells(pubrow[2])[pub[pubrow[0]] - 1] if pubrow and pub[pubrow[0]] - 1 < len(split_cells(pubrow[2])) else NOT_RECORDED
+        name = pubtxt if pubtxt != NOT_RECORDED else (cells[1] if len(cells) > 1 else fid)
+        copies = "\n".join(f"- `{f}:{i}`\n  {row}" for f, i, row in rows)
+        quotes = " ".join(dict.fromkeys(q for _, _, row in rows for q in re.findall(r"「[^」]+」", row))) or NOT_RECORDED
+        src = f"`{prim[0]}:{prim[1]}` (restored from the Folded section of `{sk}` by migrate --restore-folds)"
+        if t == "decision":
+            sec_ = {"Statement": prim[2], "Public summary": pubtxt, "User's words": quotes, "Reason": NOT_RECORDED + " — see the copies",
+                    "Date": NOT_RECORDED, "Primary source": src, "Copies": copies}
+        else:
+            sec_ = {"Text": prim[2], "Source": src, "Copies": copies}
+        path = os.path.join(ENTITY_DIR, f"{k}.md")
+        open(path, "w", encoding="utf-8").write(render_entity(k, t, name, sec_, now_iso(), how="migrate --restore-folds")); written.append(path)
+        n = {"id": k, "type": t, "name": name, "docs": [], "code_targets": [], "source_ref": fid, "file": path, "sha256": sha256_of(path)}
+        if ns[sk].get("part_of"): n["part_of"] = list(ns[sk]["part_of"])
+        if t == "decision": n["wip_status"] = "FOLDED"
+        else: n.update({"issue_status": "resolved", "closed_by": ns[sk].get("source_ref", sk)})
+        ns[k] = n
+    for sk, fid, t, rows in plan:  # edges: chain from the rows' own supersedes / refines cells, else from the survivor
+        k = fid.lower()
+        if t == "decision":
+            for _, _, row in rows:
+                for m in FOLD_REF.finditer(row):
+                    tgt = restored.get(m.group(1))
+                    if tgt and tgt != k and tgt not in ns[k].setdefault("supersedes", []): ns[k]["supersedes"].append(tgt)
+            if not ns[k].get("supersedes"): ns[k].pop("supersedes", None)
+    for sk, fid, t, rows in plan:
+        k = fid.lower()
+        if t == "issue":
+            ns[sk].setdefault("resolves", []); ns[sk]["resolves"].append(k) if k not in ns[sk]["resolves"] else None
+        elif not any(k in ns[j].get("supersedes", []) for j in restored.values() if j != k):
+            ns[sk].setdefault("supersedes", []); ns[sk]["supersedes"].append(k) if k not in ns[sk]["supersedes"] else None
+    for sk in {p_[0] for p_ in plan}:  # folded[] and the survivor's Folded section are now second copies (P1)
+        ns[sk].pop("folded", None)
+        f = ns[sk]["file"]; backup[f] = open(f, encoding="utf-8").read()
+        t_ = re.sub(r"\n## Folded\n(?:(?!\n## ).)*", "", backup[f], flags=re.S)
+        t_ = t_.rstrip("\n") + f"\n- {now_iso()} Folded section removed: its copies now live in the restored history nodes ({', '.join(p_[1].lower() for p_ in plan if p_[0] == sk)})\n"
+        open(f, "w", encoding="utf-8").write(t_); ns[sk]["sha256"] = sha256_of(f)
+    b4 = md5(args.graph)
+    try:
+        guarded_save(args.graph, g)
+    except WriteRefused:
+        for p_ in written: os.remove(p_)
+        for f, t_ in backup.items(): open(f, "w", encoding="utf-8").write(t_)
+        raise
+    log_op(g, f"migrate --restore-folds: {len(written)} history nodes restored ({', '.join(sorted(restored.values()))}); folded[] dropped", args.graph, b4)
+    return cmd_validate(g, args)
+
 def cmd_migrate(g, args):
     """Give every node without an entity file its file, mechanically and reproducibly (no judgment, no paraphrase)."""
+    if getattr(args, "restore_folds", False): return restore_folds(g, args)
     if getattr(args, "strip_graph_copies", False): return strip_graph_copies(g, args)
     if getattr(args, "plans", False): return migrate_plans(g, args)
     if getattr(args, "retire_registry", None): return retire_registry(g, args)
@@ -1515,7 +1590,7 @@ def main(argv=None):
     p = sp("append", "node", "text"); p.add_argument("--section", default=None)
     p = sp("attach", "node"); p.add_argument("--section", action="append"); p.add_argument("--as-plan", dest="as_plan", action="store_true")
     p = sp("render"); p.add_argument("--check", action="store_true")
-    p = sp("migrate"); p.add_argument("--dry-run", dest="dry_run", action="store_true"); p.add_argument("--plans", action="store_true"); p.add_argument("--retire-registry", dest="retire_registry", metavar="FILE"); p.add_argument("--strip-graph-copies", dest="strip_graph_copies", action="store_true")
+    p = sp("migrate"); p.add_argument("--dry-run", dest="dry_run", action="store_true"); p.add_argument("--plans", action="store_true"); p.add_argument("--retire-registry", dest="retire_registry", metavar="FILE"); p.add_argument("--strip-graph-copies", dest="strip_graph_copies", action="store_true"); p.add_argument("--restore-folds", dest="restore_folds", action="store_true")
     p = sp("rename", "node", "name")
     p = sp("config", "action"); p.add_argument("key", nargs="?"); p.add_argument("value", nargs="?")
     for name, a in ap._subparsers._group_actions[0].choices.items():

@@ -117,10 +117,6 @@
           "type": "string",
           "minLength": 1
         },
-        "folded": {
-          "description": "Registry ids of superseded decisions / resolved issues absorbed into this decision by compaction. Their text remains in the registry file. decision nodes only.",
-          "$ref": "#/$defs/registryIdList"
-        },
         "wip_status": { "$ref": "#/$defs/wipStatus" },
         "next": {
           "description": "True on the item(s) to take up next (D33). feature / function / task / issue only. The Backlog view lists every node carrying it.",
@@ -159,11 +155,11 @@
         },
         {
           "if": { "properties": { "type": { "enum": ["component", "feature", "function", "plan", "rule", "task"] } }, "required": ["type"] },
-          "then": { "not": { "anyOf": [ { "required": ["source_ref"] }, { "required": ["resolves"] }, { "required": ["supersedes"] }, { "required": ["folded"] } ] } }
+          "then": { "not": { "anyOf": [ { "required": ["source_ref"] }, { "required": ["resolves"] }, { "required": ["supersedes"] } ] } }
         },
         {
           "if": { "properties": { "type": { "const": "issue" } }, "required": ["type"] },
-          "then": { "not": { "anyOf": [ { "required": ["resolves"] }, { "required": ["supersedes"] }, { "required": ["folded"] } ] } }
+          "then": { "not": { "anyOf": [ { "required": ["resolves"] }, { "required": ["supersedes"] } ] } }
         },
         {
           "if": { "properties": { "type": { "not": { "const": "issue" } } }, "required": ["type"] },

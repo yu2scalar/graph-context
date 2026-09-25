@@ -192,6 +192,15 @@ def main():
         rc, out = _run(gt.cmd_config, q(action="set", key="registries.0.public_column", value="3")); assert rc == 0 and gt.load(p)["config"]["registries"][0]["public_column"] == 3, out
         rc, out = _run(gt.cmd_add_node, q(id="h", type="function", name="H", part_of="f", doc=None, code=None, source_ref=None, status="PLANNED", next=False, owner=None, trigger=None, summary="does H"))
         gh = gt.load(p)["nodes"]["h"]; assert rc == 0 and gh["file"] == "docs/entities/h.md" and gt.entity_sections(gh["file"])["Summary"] == "does H", out
+        # restore-folds: a legacy folded[] id comes back as a hidden history node from the verbatim Folded copy
+        g19 = gt.load(p); sv = g19["nodes"]["d-003"]; sv["folded"] = ["D-009"]
+        gt.append_section(sv["file"], "Folded", "- D-009 `docs/log.md:9`\n  | D-009 | old rule | — | folded into D-003 |")
+        sv["sha256"] = gt.sha256_of(sv["file"]); gt.save(p, g19)
+        rc, out = _run(gt.cmd_migrate, q(dry_run=False, plans=False, retire_registry=None, strip_graph_copies=False, restore_folds=True))
+        g20 = gt.load(p)
+        assert rc == 0 and g20["nodes"]["d-009"]["wip_status"] == "FOLDED" and "d-009" in g20["nodes"]["d-003"]["supersedes"], out
+        assert "folded" not in g20["nodes"]["d-003"] and "Folded" not in gt.entity_sections(g20["nodes"]["d-003"]["file"]), "folded[] and the Folded section must be gone"
+        assert "| D-009 | old rule |" in open(g20["nodes"]["d-009"]["file"]).read()
         print("test_graph_tool: all assertions hold")
     except AssertionError as e:
         ok = False; print("FAIL:", e)
