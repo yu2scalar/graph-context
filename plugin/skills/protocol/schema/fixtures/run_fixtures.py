@@ -104,6 +104,8 @@ bad("file on feature OK (every node has a file)", lambda b: b["nodes"]["commit-p
 bad("next on rule rejected", lambda b: b["nodes"].__setitem__("rule-a", dict(RU, next=True)))
 bad("source_ref on plan rejected", lambda b: b["nodes"].__setitem__("plan-x", dict(PL, source_ref="P1")))
 bad("owner on plan rejected", lambda b: b["nodes"].__setitem__("plan-x", dict(PL, owner="user")))
+bad("FOLDED decision OK", lambda b: b["nodes"]["d-022"].__setitem__("wip_status", "FOLDED"), True)
+bad("FOLDED feature rejected", lambda b: b["nodes"]["commit-protocol"].__setitem__("wip_status", "FOLDED"))
 
 print(f"\n{sum(results)}/{len(results)} fixtures as expected")
 sys.exit(0 if all(results) else 1)

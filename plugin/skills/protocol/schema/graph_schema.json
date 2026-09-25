@@ -44,9 +44,9 @@
       "enum": ["component", "feature", "function", "decision", "issue", "plan", "rule", "task"]
     },
     "wipStatus": {
-      "description": "PLANNED = not yet started (a plan step, D33 / D34 R-b); IN_PROGRESS; BLOCKED; DONE. On decision nodes it is the implementation state: PLANNED = decided, not yet implemented; IN_PROGRESS = being implemented; DONE = implemented (or nothing to implement). Not used on issue nodes (they carry issue_status).",
+      "description": "PLANNED = not yet started (a plan step, D33 / D34 R-b); IN_PROGRESS; BLOCKED; DONE. On decision nodes it is the implementation state: PLANNED = decided, not yet implemented; IN_PROGRESS = being implemented; DONE = implemented (or nothing to implement); FOLDED = absorbed into the decision that supersedes it — kept as a hidden history node (D31, D37), decision nodes only. Not used on issue nodes (they carry issue_status).",
       "type": "string",
-      "enum": ["PLANNED", "IN_PROGRESS", "BLOCKED", "DONE"]
+      "enum": ["PLANNED", "IN_PROGRESS", "BLOCKED", "DONE", "FOLDED"]
     },
     "issueStatus": {
       "description": "State of an issue node. open; resolved (by a decision's `resolves` edge or by an action); transferred (handed to another project or session).",
@@ -180,6 +180,10 @@
         {
           "if": { "properties": { "type": { "const": "issue" } }, "required": ["type"] },
           "then": { "required": ["issue_status"], "not": { "required": ["wip_status"] } }
+        },
+        {
+          "if": { "properties": { "type": { "not": { "const": "decision" } } }, "required": ["type"] },
+          "then": { "not": { "properties": { "wip_status": { "const": "FOLDED" } }, "required": ["wip_status"] } }
         },
         {
           "if": { "properties": { "type": { "const": "issue" }, "issue_status": { "enum": ["resolved", "transferred"] } }, "required": ["type", "issue_status"] },
