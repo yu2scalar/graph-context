@@ -147,6 +147,24 @@ def main():
         rc, out = _run(gt.cmd_attach, q(node="d-002", section=sec, as_plan=False)); assert rc == 1, "attach twice must be refused"
         rc, out = _run(gt.cmd_attach, q(node="g", section=["Goal=G", "Approval=user OK"], as_plan=True))
         assert rc == 0 and gt.load(p)["nodes"]["g"]["type"] == "plan", out
+        # migrate: deterministic, reproducible (same input -> same files), every node gets a file; rename keeps name == heading
+        g11 = gt.load(p); g11["config"]["registries"][0]["public_column"] = 2; gt.save(p, g11)
+        rc, out = _run(gt.cmd_migrate, q(dry_run=True)); assert rc == 0 and "core" in out and not os.path.exists("docs/entities/core.md"), out
+        snap = {k: dict(v) for k, v in gt.load(p)["nodes"].items()}
+        rc, out = _run(gt.cmd_migrate, q(dry_run=False)); g12 = gt.load(p)
+        assert rc == 0 and all(n.get("file") for n in g12["nodes"].values()), out
+        first = {k: open(n["file"]).read().split("## Log")[0] for k, n in g12["nodes"].items()}
+        assert "(not recorded in the source)" in first["tbd-01"] or "TBD-01" in first["tbd-01"], first["tbd-01"]
+        for k, n in g12["nodes"].items():
+            if k in snap and not snap[k].get("file"):
+                os.remove(n["file"]); n.pop("file"); n.pop("sha256")
+        gt.save(p, g12)
+        rc, out = _run(gt.cmd_migrate, q(dry_run=False)); g13 = gt.load(p)
+        again = {k: open(n["file"]).read().split("## Log")[0] for k, n in g13["nodes"].items()}
+        assert again == first, "migrate must be reproducible"
+        rc, out = _run(gt.cmd_rename, q(node="core", name="Core v2")); g14 = gt.load(p)
+        assert rc == 0 and g14["nodes"]["core"]["name"] == "Core v2" and gt.entity_title(g14["nodes"]["core"]["file"]) == "Core v2", out
+        g14["nodes"]["core"]["name"] = "stale"; probs, _ = gt.validate(g14, want_schema=False); assert any("name differs from the heading" in x for x in probs)
         print("test_graph_tool: all assertions hold")
     except AssertionError as e:
         ok = False; print("FAIL:", e)

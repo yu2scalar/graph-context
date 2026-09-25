@@ -138,7 +138,7 @@
           "minLength": 1
         },
         "file": {
-          "description": "The entity file holding this node's text (one file per entity, docs/entities/<id>.md; plan integrity-store P1). decision / issue / plan / rule only. Written by graph_tool only; append-only.",
+          "description": "The entity file holding this node's text (one file per node, docs/entities/<id>.md; plan integrity-store P1). Any node type. Written by graph_tool only; append-only. The node's `name` is a copy of the file's `# <id> — <name>` heading kept by the tool.",
           "$ref": "#/$defs/filePath"
         },
         "sha256": {
@@ -168,10 +168,6 @@
         {
           "if": { "properties": { "type": { "not": { "const": "issue" } } }, "required": ["type"] },
           "then": { "not": { "anyOf": [ { "required": ["issue_status"] }, { "required": ["owner"] }, { "required": ["trigger"] }, { "required": ["closed_by"] } ] } }
-        },
-        {
-          "if": { "properties": { "type": { "enum": ["component", "feature", "function", "task"] } }, "required": ["type"] },
-          "then": { "not": { "anyOf": [ { "required": ["file"] }, { "required": ["sha256"] } ] } }
         },
         {
           "if": { "required": ["file"] },
@@ -206,6 +202,11 @@
         "file": {
           "description": "Project-relative path of the registry file that holds the entries' text.",
           "$ref": "#/$defs/filePath"
+        },
+        "public_column": {
+          "description": "1-based cell index (cell 1 = the id) of this registry's public-safe text; `migrate` copies it into each decision's `Public summary` section.",
+          "type": "integer",
+          "minimum": 2
         }
       }
     },

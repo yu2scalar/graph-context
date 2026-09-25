@@ -273,6 +273,8 @@ def validate(g, want_schema=True, drift=True):
             else:
                 if n.get("sha256") and sha256_of(f) != n["sha256"]:
                     problems.append(f"{k}: entity file `{f}` changed outside graph_tool (sha256 mismatch) — P2; restore it or record the change with `append`")
+                if entity_title(f) != n["name"]:
+                    problems.append(f"{k}: name differs from the heading of `{f}` (the name is a copy of the heading; use `rename`)")
                 missing = [h for h in HEADINGS.get(n["type"], []) + ["Log"] if h not in entity_sections(f)]
                 if missing: problems.append(f"{k}: entity file `{f}` lacks sections {missing}")
     problems += view_drift(g) if (want_schema and drift) else []
@@ -359,14 +361,16 @@ def fold_candidates(g):
     return out
 
 # ---------------------------------------------------------------- entities (plan integrity-store P1–P5)
-ENTITY_TYPES = ("decision", "issue", "plan", "rule")
+ENTITY_TYPES = ("decision", "issue", "plan", "rule")  # created with `add`; structure nodes get their file via `migrate` / `attach`
 ENTITY_DIR = "docs/entities"
 HEADINGS = {  # required sections per entity type, in order; "Log" is always last and append-only
     "decision": ["Statement", "Public summary", "User's words", "Reason", "Date"],
     "issue": ["Text", "Source"],
     "plan": ["Goal", "Approval"],
     "rule": ["Statement", "Source"],
+    "component": ["Summary"], "feature": ["Summary"], "function": ["Summary"], "task": ["Summary"],
 }
+NOT_RECORDED = "(not recorded in the source)"
 ENTITY_MARK = "<!-- entity {id} · {type} · written by graph_tool; do not edit by hand — use `graph_tool.py append` -->"
 
 def sha256_of(path):
@@ -381,15 +385,21 @@ def entity_sections(path):
         if cur is not None: out[cur].append(line)
     return {k: "\n".join(v).strip() for k, v in out.items()}
 
-def render_entity(nid, ntype, title, sections, when):
+def render_entity(nid, ntype, title, sections, when, how="add"):
     lines = [ENTITY_MARK.format(id=nid, type=ntype), f"# {nid} — {title}", ""]
     for h in HEADINGS[ntype]:
         lines += [f"## {h}", sections[h].strip(), ""]
     for h, t in sections.items():
         if h not in HEADINGS[ntype] and h != "Log":
             lines += [f"## {h}", t.strip(), ""]
-    lines += ["## Log", f"- {when} created by graph_tool", ""]
+    lines += ["## Log", f"- {when} created by graph_tool {how}", ""]
     return "\n".join(lines)
+
+def entity_title(path):
+    for line in open(path, encoding="utf-8"):
+        m = re.match(r"^# (\S+) — (.+?)\s*$", line)
+        if m: return m.group(2)
+    return None
 
 def entity_text(ns, k):
     n = ns[k]
@@ -1057,6 +1067,120 @@ def cmd_attach(g, args):
     print(f"attached {path} to `{args.node}`")
     return cmd_validate(g, args)
 
+ROW_RE = r"^\| {id} \|"
+
+def split_cells(line):
+    return [c.strip() for c in re.split(r"(?<!\\)\|", line.strip().strip("|"))]
+
+def scan_rows(g):
+    """id -> [(file, line_no, row)] over registry files + docs_scope, excluding generated/entity files. Deterministic order."""
+    files = []
+    for r in g["config"].get("registries", []):
+        if r["file"] not in files: files.append(r["file"])
+    import glob
+    for pat in g["config"].get("docs_scope", []):
+        for f in sorted(glob.glob(pat, recursive=True)):
+            if f not in files and not f.startswith((ENTITY_DIR + "/", "docs/views/")): files.append(f)
+    rows = defaultdict(list)
+    for f in files:
+        if not os.path.exists(f): continue
+        for i, line in enumerate(open(f, encoding="utf-8", errors="replace"), 1):
+            m = re.match(r"^\| ([A-Za-z]+-?\d+) \|", line) or re.match(r"^- ([A-Z]+-?\d+) ", line)  # table row or list item
+            if m: rows[m.group(1)].append((f, i, line.rstrip("\n")))
+    return rows
+
+def migrate_sections(g, k, rows):
+    """Deterministic sections for node k (no judgment): primary copy = first registry in config order whose pattern matches
+    and whose file holds a row for the id; every copy verbatim with file:line; folded ids' rows; quotes 「…」 collected."""
+    n = g["nodes"][k]; regs = g["config"].get("registries", []); t = n["type"]
+    if t not in ("decision", "issue"):
+        sec = {"Summary": NOT_RECORDED + " — the name is the heading"}
+        if n.get("docs"): sec["Docs"] = "\n".join(f"- `{d}`" for d in n["docs"])
+        if n.get("code_targets"): sec["Code"] = "\n".join(f"- `{c}`" for c in n["code_targets"])
+        if t == "plan": sec.update({"Goal": NOT_RECORDED, "Approval": NOT_RECORDED})
+        if t == "rule": sec.update({"Statement": n["name"], "Source": NOT_RECORDED})
+        return sec, None
+    ref = n.get("source_ref"); copies = rows.get(ref, []) if ref else []
+    primary = None
+    for r in regs:
+        if r["type"] == t and ref and re.match(r["id_pattern"], ref):
+            hit = [c for c in copies if c[0] == r["file"]]
+            if hit: primary = (r, hit[0]); break
+    public = NOT_RECORDED
+    for r in regs:
+        if r.get("public_column") and ref and re.match(r["id_pattern"], ref):
+            hit = [c for c in copies if c[0] == r["file"]]
+            if hit:
+                cells = split_cells(hit[0][2]); col = r["public_column"] - 1
+                if col < len(cells): public = cells[col]
+                break
+    prim_txt = primary[1][2] if primary else NOT_RECORDED
+    prim_src = f"`{primary[1][0]}:{primary[1][1]}` (first matching registry in config order)" if primary else NOT_RECORDED
+    quotes = []
+    for c in copies:
+        for q in re.findall(r"「[^」]+」", c[2]):
+            if q not in quotes: quotes.append(q)
+    copy_txt = "\n".join(f"- `{f}:{i}`\n  {row}" for f, i, row in copies) or NOT_RECORDED
+    folded = []
+    for fid in n.get("folded", []):
+        for f, i, row in rows.get(fid, []):
+            folded.append(f"- {fid} `{f}:{i}`\n  {row}")
+    if t == "decision":
+        sec = {"Statement": prim_txt, "Public summary": public, "User's words": " ".join(quotes) or NOT_RECORDED,
+               "Reason": NOT_RECORDED + " — see the copies", "Date": NOT_RECORDED, "Primary source": prim_src, "Copies": copy_txt}
+    else:
+        sec = {"Text": prim_txt + ("\n\n(The row's status / owner / trigger columns are historical; the current state is on the node.)" if primary else ""),
+               "Source": prim_src, "Copies": copy_txt}
+    if folded: sec["Folded"] = "\n".join(folded)
+    differ = None
+    if len(copies) > 1:
+        texts = {re.sub(r"\W+", "", " ".join(split_cells(c[2])[1:2]).lower()) for c in copies}
+        if len(texts) > 1: differ = [f"{f}:{i}" for f, i, _ in copies]
+    return sec, differ
+
+def cmd_migrate(g, args):
+    """Give every node without an entity file its file, mechanically and reproducibly (no judgment, no paraphrase)."""
+    ns = g["nodes"]; rows = scan_rows(g); todo = sorted(k for k, n in ns.items() if not n.get("file"))
+    report, written = [], []
+    for k in todo:
+        sec, differ = migrate_sections(g, k, rows)
+        path = os.path.join(ENTITY_DIR, f"{k}.md")
+        report.append((k, ns[k]["type"], path, "copies differ: " + ", ".join(differ) if differ else "—"))
+        if args.dry_run: continue
+        if os.path.exists(path): print(f"ERROR: `{path}` exists without a node link — resolve by hand first"); return 1
+        os.makedirs(ENTITY_DIR, exist_ok=True)
+        heads = HEADINGS.get(ns[k]["type"], ["Summary"])
+        full = {h: sec.get(h, NOT_RECORDED) for h in heads}; full.update(sec)
+        open(path, "w", encoding="utf-8").write(render_entity(k, ns[k]["type"], ns[k]["name"], full, now_iso(), how="migrate"))
+        ns[k]["file"] = path; ns[k]["sha256"] = sha256_of(path); written.append(path)
+    print("## migrate" + (" --dry-run" if args.dry_run else ""))
+    print(table(["node", "type", "entity file", "review"], report))
+    print(f"{len(report)} nodes without a file; {sum(1 for r in report if r[3] != '—')} with copies whose text differs (resolve each with `append <id>`).")
+    if args.dry_run: return 0
+    b4 = md5(args.graph)
+    try:
+        guarded_save(args.graph, g)
+    except WriteRefused:
+        for p_ in written: os.remove(p_)
+        raise
+    log_op(g, f"migrate: {len(written)} entity files written", args.graph, b4)
+    return cmd_validate(g, args)
+
+def cmd_rename(g, args):
+    """The name is a copy of the entity heading: change both together and log it."""
+    ns = g["nodes"]
+    if args.node not in ns: print(f"ERROR: `{args.node}` not in nodes"); return 1
+    n = ns[args.node]; old = n["name"]; n["name"] = args.name
+    if n.get("file"):
+        f = n["file"]
+        if sha256_of(f) != n.get("sha256"): print(f"ERROR: `{f}` was changed outside graph_tool"); return 1
+        txt = open(f, encoding="utf-8").read()
+        txt = re.sub(r"^# (\S+) — .+$", lambda m: f"# {m.group(1)} — {args.name}", txt, count=1, flags=re.M)
+        txt = txt.rstrip("\n") + f"\n- {now_iso()} renamed from: {old}\n"
+        open(f, "w", encoding="utf-8").write(txt); n["sha256"] = sha256_of(f)
+    b4 = md5(args.graph); guarded_save(args.graph, g); log_op(g, f"rename {args.node}: {old!r} -> {args.name!r}", args.graph, b4)
+    print(f"{args.node}: renamed"); return cmd_validate(g, args)
+
 def cmd_append(g, args):
     """Entity files are append-only: add a dated line under Log (corrections, status notes, later user words)."""
     ns = g["nodes"]
@@ -1163,6 +1287,8 @@ def main(argv=None):
     p = sp("append", "node", "text")
     p = sp("attach", "node"); p.add_argument("--section", action="append"); p.add_argument("--as-plan", dest="as_plan", action="store_true")
     p = sp("render"); p.add_argument("--check", action="store_true")
+    p = sp("migrate"); p.add_argument("--dry-run", dest="dry_run", action="store_true")
+    p = sp("rename", "node", "name")
     for name, a in ap._subparsers._group_actions[0].choices.items():
         if name == "handover-tables": a.add_argument("--verify", default=None, metavar="HANDOVER_MD")
         if name == "hydrate": a.add_argument("--dry-run", dest="dry_run", action="store_true")
@@ -1178,7 +1304,7 @@ def main(argv=None):
           "fold": cmd_fold, "split": cmd_split, "set-status": cmd_set_status, "add-edge": cmd_add_edge, "set-current": cmd_set_current,
           "add-node": cmd_add_node, "lint-prose": cmd_lint_prose, "lint-handover": cmd_lint_handover,
           "add-doc": cmd_add_path, "add-code": cmd_add_path, "backlog": cmd_backlog, "set-next": cmd_set_next,
-          "set-issue": cmd_set_issue, "close": cmd_close, "add": cmd_add, "append": cmd_append, "attach": cmd_attach, "render": cmd_render}[args.cmd](g, args)
+          "set-issue": cmd_set_issue, "close": cmd_close, "add": cmd_add, "append": cmd_append, "attach": cmd_attach, "migrate": cmd_migrate, "rename": cmd_rename, "render": cmd_render}[args.cmd](g, args)
     except WriteRefused as e:
         print("## write refused — the graph would be invalid; nothing was written (U31)")
         print(table(["severity", "finding"], [("error", p) for p in e.args[0]]))

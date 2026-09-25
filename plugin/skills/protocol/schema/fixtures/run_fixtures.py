@@ -100,7 +100,7 @@ bad("rule entity OK", lambda b: b["nodes"].__setitem__("rule-a", dict(RU)), True
 bad("decision with file + sha256 OK", lambda b: b["nodes"]["d-022"].update(file="docs/entities/d-022.md", sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), True)
 bad("file without sha256 rejected", lambda b: b["nodes"].__setitem__("plan-x", {k: v for k, v in PL.items() if k != "sha256"}))
 bad("bad sha256 rejected", lambda b: b["nodes"].__setitem__("plan-x", dict(PL, sha256="xyz")))
-bad("file on feature rejected", lambda b: b["nodes"]["commit-protocol"].update(file="docs/entities/c.md", sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+bad("file on feature OK (every node has a file)", lambda b: b["nodes"]["commit-protocol"].update(file="docs/entities/c.md", sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), True)
 bad("next on rule rejected", lambda b: b["nodes"].__setitem__("rule-a", dict(RU, next=True)))
 bad("source_ref on plan rejected", lambda b: b["nodes"].__setitem__("plan-x", dict(PL, source_ref="P1")))
 bad("owner on plan rejected", lambda b: b["nodes"].__setitem__("plan-x", dict(PL, owner="user")))
