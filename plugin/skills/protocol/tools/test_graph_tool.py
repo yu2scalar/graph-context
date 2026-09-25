@@ -34,7 +34,16 @@ def main():
         # fold via CLI
         class A: graph = p; victim = "d-001"; survivor = "d-002"; lang = "en"
         rc = gt.cmd_fold(gt.load(p), A); g2 = gt.load(p)
-        assert rc == 0 and "d-001" not in g2["nodes"] and g2["nodes"]["d-002"]["folded"] == ["D-001"], g2["nodes"]["d-002"]
+        assert rc == 0 and g2["nodes"]["d-001"]["wip_status"] == "FOLDED" and "d-001" in g2["nodes"]["d-002"]["supersedes"] and "folded" not in g2["nodes"]["d-002"], g2["nodes"]["d-002"]
+        assert ("d-001", "d-002", "superseded, no other live in-edges") not in gt.fold_candidates(g2), "a folded decision is no candidate"
+        import io as _io, contextlib as _cl
+        class HD: graph = p; node = "f"; dry_run = True; history = False; lang = "en"
+        b_ = _io.StringIO()
+        with _cl.redirect_stdout(b_): gt.cmd_hydrate(gt.load(p), HD)
+        assert "| d-001 |" not in b_.getvalue() and "History hidden" in b_.getvalue(), b_.getvalue()[:400]
+        HD.history = True; b_ = _io.StringIO()
+        with _cl.redirect_stdout(b_): gt.cmd_hydrate(gt.load(p), HD)
+        assert "d-001" in b_.getvalue(), "--history shows folded nodes"
         # split via CLI
         class B: graph = p; node = "f"; children = ["f-sub=d-002"]; lang = "en"
         rc = gt.cmd_split(gt.load(p), B); g3 = gt.load(p)

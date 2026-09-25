@@ -155,8 +155,12 @@ def hops(ns, origin, depth=2):
         frontier = nxt
     return hop
 
+def hidden(n):
+    """History nodes hidden by default (D31, D37): folded decisions and resolved issues; transferred issues stay visible."""
+    return n.get("wip_status") == "FOLDED" or (n["type"] == "issue" and n.get("issue_status") == "resolved")
+
 def attached(ns, f):
-    return sorted(k for k, n in ns.items() if n["type"] in ("decision", "issue") and n.get("part_of") == [f])
+    return sorted(k for k, n in ns.items() if n["type"] in ("decision", "issue") and n.get("part_of") == [f] and not hidden(n))
 
 def component_roots(ns):
     return [c for n in ns.values() if n["type"] == "component" for c in n["code_targets"]]
@@ -358,12 +362,11 @@ def growth_candidates(g):
 def fold_candidates(g):
     ns = g["nodes"]; ins = in_edges(ns); out = []
     for k, n in ns.items():
-        if n.get("wip_status") in ("IN_PROGRESS", "BLOCKED") or not ins[k]:
+        if n.get("wip_status") in ("IN_PROGRESS", "BLOCKED", "FOLDED") or not ins[k]:
             continue
         if n["type"] == "decision" and all(e == "supersedes" for _, e in ins[k]):
             out.append((k, ins[k][0][0], "superseded, no other live in-edges"))
-        if n["type"] == "issue" and all(e == "resolves" for _, e in ins[k]):
-            out.append((k, ins[k][0][0], "resolved, no other live in-edges"))
+        # resolved issues need no fold: they are hidden by issue_status (D37)
     return out
 
 # ---------------------------------------------------------------- entities (plan integrity-store P1–P5)
@@ -442,12 +445,15 @@ def first_line(t):
 
 def folded_into(ns, k):
     for j, m in ns.items():
-        if k in m.get("supersedes", []) and ns[k].get("wip_status") == "folded":
+        if k in m.get("supersedes", []) and ns[k].get("wip_status") == "FOLDED":
             return j
     return None
 
 def decision_status(ns, k):
     n = ns[k]; st = n.get("wip_status")
+    if st == "FOLDED":
+        by = folded_into(ns, k)
+        return f"folded into {ns[by].get('source_ref', by)}" if by else "folded"
     if st == "PLANNED": return "decided, not yet implemented"
     if st == "IN_PROGRESS": return "in progress"
     if st == "BLOCKED": return "blocked"
@@ -473,7 +479,7 @@ def render_view(g, kind):
             s_ = sec(k)
             if not s_: continue  # no entity file yet: nothing public to show
             rows_.append((ref(k), f"| {ref(k)} | {first_line(s_.get('Public summary'))} | {rel(k)} | {decision_status(ns, k)} |"))
-            for fid in ns[k].get("folded", []):  # folded ids stay visible publicly, text from the public copy in the Folded section
+            for fid in [x for x in ns[k].get("folded", []) if x not in {m.get("source_ref") for m in ns.values()}]:  # legacy folded[] ids without a node (until restore-folds)
                 txt = "—"
                 for m in re.finditer(r"^- " + re.escape(fid) + r" `([^`]+):\d+`\n  (.+)$", s_.get("Folded", ""), re.M):
                     if m.group(1) in pub_files:
@@ -492,7 +498,7 @@ def render_view(g, kind):
         out += ["# Current specification (generated: active decisions per node)", ""]
         by = defaultdict(list)
         for k in decs:
-            if ns[k].get("wip_status") != "folded": by[(ns[k].get("part_of") or ["(unattached)"])[0]].append(k)
+            if ns[k].get("wip_status") != "FOLDED": by[(ns[k].get("part_of") or ["(unattached)"])[0]].append(k)
         for parent in sorted(by):
             out += [f"## {parent}", ""]
             for k in by[parent]:
@@ -616,11 +622,17 @@ def cmd_hydrate(g, args):
     if origin not in ns:
         close = [k for k in ns if origin.lower() in k or k in origin.lower()]
         print(f"ERROR: node `{origin}` not found. Closest ids: {', '.join(sorted(close)) or 'none'}"); return 1
-    hop = hops(ns, origin)
+    hop_all = hops(ns, origin)
+    hist = {k for k in hop_all if k != origin and hidden(ns[k])}
+    hop = hop_all if getattr(args, "history", False) else {k: v for k, v in hop_all.items() if k not in hist}
     print(f"## Impact Assessment Checklist — {origin}\n")
     print("### Components (always shown — R7)"); print(components_table(ns)); print()
     print("### Backlog (graph-wide, always shown — D33)"); print(backlog_md(g)); print()
-    print("### Subgraph"); print(subgraph_table(ns, hop)); print(SUBGRAPH_LEGEND); print()
+    print("### Subgraph"); print(subgraph_table(ns, hop)); print(SUBGRAPH_LEGEND)
+    if hist and not getattr(args, "history", False):
+        nf = sum(1 for k in hist if ns[k]["type"] == "decision"); ni = len(hist) - nf
+        print(f"History hidden (D31, D37): {len(hist)} nodes in hops 0–2 — {nf} folded decisions, {ni} resolved issues; run with `--history` to show them.")
+    print()
     rows = []
     for k in sorted(hop, key=lambda x: (hop[x][0], x)):
         if ns[k].get("file"):  # P1: the node's own text — read it first
@@ -962,22 +974,17 @@ def cmd_fold(g, args):
     if ns[s]["type"] != "decision": print("ERROR: survivor must be a decision"); return 1
     if ns[v].get("wip_status") in ("IN_PROGRESS", "BLOCKED"): print(f"ERROR: `{v}` is {ns[v]['wip_status']}; refuse to fold"); return 1
     vic, sur = ns[v], ns[s]
-    sur.setdefault("folded", [])
-    for i in [vic.get("source_ref")] + vic.get("folded", []):
-        if i and i not in sur["folded"]: sur["folded"].append(i)
-    for a in vic.get("affects", []):
+    if vic["type"] != "decision": print("ERROR: only decisions are folded; a resolved issue is already hidden (D37)"); return 1
+    if vic.get("wip_status") == "FOLDED": print(f"ERROR: `{v}` is already folded"); return 1
+    # D31: hide, do not delete — the victim stays as a history node under the survivor
+    vic["wip_status"] = "FOLDED"
+    if v not in sur.setdefault("supersedes", []): sur["supersedes"].append(v)
+    for a in vic.get("affects", []):  # the survivor inherits the constraints so drift tracking stays complete
         if a != s and a not in sur.setdefault("affects", []): sur["affects"].append(a)
-    for d in vic.get("docs", []):
-        if d not in sur["docs"]: sur["docs"].append(d)
-    del ns[v]
-    for n in ns.values():
-        for e in EDGES:
-            if e in n:
-                n[e] = [t for t in n[e] if t != v]
-                if not n[e]: del n[e]
     if g.get("current_node") == v: g["current_node"] = s
-    b4 = md5(args.graph); guarded_save(args.graph, g); log_op(g, f"fold {v} -> {s}; {s}.folded={sur['folded']}", args.graph, b4)
-    print(f"folded `{v}` into `{s}`; {s}.folded = {sur['folded']}")
+    b4 = md5(args.graph); guarded_save(args.graph, g); log_op(g, f"fold {v} -> {s} (hidden: {v}.wip_status FOLDED, {s}.supersedes {v})", args.graph, b4)
+    if vic.get("file"): pass  # the entity file is unchanged; history is the node + edge
+    print(f"folded `{v}` into `{s}` — kept as a hidden history node")
     return cmd_validate(g, args)
 
 def cmd_split(g, args):
@@ -1513,7 +1520,7 @@ def main(argv=None):
     p = sp("config", "action"); p.add_argument("key", nargs="?"); p.add_argument("value", nargs="?")
     for name, a in ap._subparsers._group_actions[0].choices.items():
         if name == "handover-tables": a.add_argument("--verify", default=None, metavar="HANDOVER_MD")
-        if name == "hydrate": a.add_argument("--dry-run", dest="dry_run", action="store_true")
+        if name == "hydrate": a.add_argument("--dry-run", dest="dry_run", action="store_true"); a.add_argument("--history", action="store_true")
     args = ap.parse_args(argv)
     if not os.path.exists(args.graph):
         print(f"ERROR: {args.graph} not found (run from the project root, or pass --graph)"); return 1
