@@ -6,7 +6,7 @@ description: Graph-based project context management (protocol skill of the `grap
 # graph-context
 
 > Status: **v3.3.0-dev.1 (2026-09-25 — D33 Backlog view, issue_status / PLANNED / next, backlog/set-next/set-issue/close; v3.2.0 2026-09-24 — D26 protocol as code: `tools/graph_tool.py` executes R1, hydrate, check, handover tables, fold, split; rule R9; v3.1.1 = D24/D25; v3.1.0 = plugin `graph`; v3.0.0 = plugin packaging)**
-> Long-form material (full data model, public decision register D1–D34) lives in `${CLAUDE_SKILL_DIR}/references/`.
+> Long-form material (full data model, public decision register D1–D35) lives in `${CLAUDE_SKILL_DIR}/references/`.
 
 ## Purpose
 
