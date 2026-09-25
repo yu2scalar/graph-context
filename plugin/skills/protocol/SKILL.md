@@ -42,7 +42,10 @@ component, feature or function. `task` exists for manual use and is never genera
 **Node fields**: required `id`, `type`, `name`, `docs[]`, `code_targets[]`. Optional edges:
 `part_of` (≤1, child → parent), `depends_on`, `affects`, `resolves` (decision → issue only),
 `supersedes` (decision → decision only). Optional `source_ref` (registry id, decision/issue only,
-single-valued), `folded[]` (registry ids absorbed by compaction, decision only), `wip_status`.
+single-valued), `folded[]` (registry ids absorbed by compaction, decision only), `wip_status`
+(`PLANNED` | `IN_PROGRESS` | `BLOCKED` | `DONE`; not on issues), `next` (bool, the item to take up next;
+not on component/decision). Issue nodes require `issue_status` (`open` | `resolved` | `transferred`) and may
+carry `owner` (`user` | `claude`) and `trigger`; `closed_by` is required when not open (D33).
 
 **Edge direction conventions**
 

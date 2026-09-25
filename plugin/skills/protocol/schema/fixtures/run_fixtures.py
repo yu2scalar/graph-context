@@ -41,7 +41,8 @@ good = {
                             "part_of": ["core"], "depends_on": ["settle-lazy"], "wip_status": "IN_PROGRESS"},
         "settle-lazy": {"id": "settle-lazy", "type": "function", "name": "Lazy settle", "docs": [], "code_targets": ["settler/Lazy.java"], "part_of": ["settler"]},
         "tbd-24": {"id": "tbd-24", "type": "issue", "name": "Porting semantics", "docs": [], "code_targets": [],
-                   "source_ref": "TBD-24", "part_of": ["commit-protocol"], "affects": ["commit-protocol"]},
+                   "source_ref": "TBD-24", "part_of": ["commit-protocol"], "affects": ["commit-protocol"],
+                   "issue_status": "resolved", "closed_by": "D-022", "owner": "user", "trigger": "before release"},
         "d-022": {"id": "d-022", "type": "decision", "name": "No hardcode", "docs": [], "code_targets": [],
                   "source_ref": "D-022", "part_of": ["core"], "affects": ["commit-protocol", "settle-lazy"],
                   "resolves": ["tbd-24"], "supersedes": [], "folded": ["D-010", "TBD-03"]}}}
@@ -72,6 +73,22 @@ bad("dup edge rejected", lambda b: b["nodes"]["d-022"].__setitem__("affects", ["
 bad("task with source_ref rejected", lambda b: b["nodes"].__setitem__("t1", {"id": "t1", "type": "task", "name": "t", "docs": [], "code_targets": [], "source_ref": "X"}))
 bad("decision without source_ref OK (optional)", lambda b: b["nodes"]["d-022"].pop("source_ref"), True)
 bad("empty registries OK", lambda b: b["config"].__setitem__("registries", []), True)
+# D33 / Q3 = A: PLANNED, next, issue_status / owner / trigger / closed_by
+bad("PLANNED feature with next OK", lambda b: b["nodes"]["commit-protocol"].update(wip_status="PLANNED", next=True), True)
+bad("open issue without closed_by OK", lambda b: [b["nodes"]["tbd-24"].__setitem__("issue_status", "open"), b["nodes"]["tbd-24"].pop("closed_by")], True)
+bad("issue next OK", lambda b: b["nodes"]["tbd-24"].__setitem__("next", True), True)
+bad("bad wip_status rejected", lambda b: b["nodes"]["commit-protocol"].__setitem__("wip_status", "TODO"))
+bad("issue without issue_status rejected", lambda b: b["nodes"]["tbd-24"].pop("issue_status"))
+bad("bad issue_status rejected", lambda b: b["nodes"]["tbd-24"].__setitem__("issue_status", "closed"))
+bad("resolved issue without closed_by rejected", lambda b: b["nodes"]["tbd-24"].pop("closed_by"))
+bad("transferred issue without closed_by rejected", lambda b: [b["nodes"]["tbd-24"].__setitem__("issue_status", "transferred"), b["nodes"]["tbd-24"].pop("closed_by")])
+bad("wip_status on issue rejected", lambda b: b["nodes"]["tbd-24"].__setitem__("wip_status", "DONE"))
+bad("issue_status on feature rejected", lambda b: b["nodes"]["commit-protocol"].__setitem__("issue_status", "open"))
+bad("owner on decision rejected", lambda b: b["nodes"]["d-022"].__setitem__("owner", "user"))
+bad("bad owner rejected", lambda b: b["nodes"]["tbd-24"].__setitem__("owner", "team"))
+bad("next on decision rejected", lambda b: b["nodes"]["d-022"].__setitem__("next", True))
+bad("next on component rejected", lambda b: b["nodes"]["core"].__setitem__("next", True))
+bad("non-boolean next rejected", lambda b: b["nodes"]["commit-protocol"].__setitem__("next", "yes"))
 
 print(f"\n{sum(results)}/{len(results)} fixtures as expected")
 sys.exit(0 if all(results) else 1)

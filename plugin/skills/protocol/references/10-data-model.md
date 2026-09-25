@@ -36,7 +36,12 @@ Deliberately absent: `code_roots` (derived: union of component nodes' `code_targ
 | `supersedes` | no | nodeId[] | decision → decision only |
 | `source_ref` | no | string | registry id verbatim (`D-022`, `TBD-24`); decision/issue only; single-valued |
 | `folded` | no | string[] | registry ids absorbed by compaction; decision only |
-| `wip_status` | no | enum | `DONE` \| `IN_PROGRESS` \| `BLOCKED` |
+| `wip_status` | no | enum | `PLANNED` \| `IN_PROGRESS` \| `BLOCKED` \| `DONE`; `PLANNED` = not-yet-started plan step (D33, D34 R-b); never on issue nodes |
+| `next` | no | bool | the item to take up next (D33); feature/function/task/issue only |
+| `issue_status` | issue: yes | enum | `open` \| `resolved` \| `transferred`; issue only |
+| `owner` | no | enum | `user` \| `claude` — who resolves the issue; issue only |
+| `trigger` | no | string | when / on what event the issue is taken up; issue only |
+| `closed_by` | when not open | string | decision id, commit hash or short action text that closed the issue; issue only |
 
 ## Hierarchy and growth
 Root → component → feature → function. A feature starts as one node; when attached decisions+issues reach
