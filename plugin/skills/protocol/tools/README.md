@@ -13,10 +13,14 @@
 | `handover-tables` | no | Markdown for handover §2, §6 lines, §7 table — paste verbatim (D25) |
 | `fold <victim> <survivor>` | yes | fold a superseded decision / resolved issue into the survivor, then validate |
 | `split <node> <child>=<id,id> …` | yes | create `function` children under a feature and move attachments, then validate |
-| `set-status <node> <DONE\|IN_PROGRESS\|BLOCKED\|none>` | yes | change `wip_status`, then validate |
+| `set-status <node> <PLANNED\|IN_PROGRESS\|BLOCKED\|DONE\|none>` | yes | change `wip_status` (not on issues), then validate |
+| `backlog [--owner user\|claude] [--next-only] [--component C] [--all]` | no | graph-wide Backlog view (D33): open issues (default filter = `config.backlog_filter`), all PLANNED / IN_PROGRESS / BLOCKED / `next` nodes; issues the filter hides are counted per component; warns when nothing carries `next`. The same table is printed in `hydrate` |
+| `set-next <node> [--off]` | yes | set / clear `next` (not on component / decision), then validate |
+| `set-issue <issue> [--owner user\|claude] [--trigger TEXT]` | yes | set who resolves an issue and when, then validate |
+| `close <issue> <resolved\|transferred> --by <decision\|commit\|text>` | yes | set `issue_status` + `closed_by`; when `--by` names a decision (node id or registry id) also adds `<decision>.resolves -> <issue>`, then validate |
 | `add-edge <src> <kind> <dst>` | yes | add one edge, then validate |
 | `set-current <node\|null>` | yes | set `current_node`, then validate |
-| `add-node <id> <type> "<name>" [--part-of P] [--doc F]… [--code F]… [--source-ref ID] [--status S]` | yes | create a node, then validate |
+| `add-node <id> <type> "<name>" [--part-of P] [--doc F]… [--code F]… [--source-ref ID] [--status S] [--next] [--owner O] [--trigger T]` | yes | create a node (issue nodes start with `issue_status: open`; `--owner`/`--trigger` issue only), then validate |
 | `handover-tables --verify <handover.md>` | no | compare the pasted §2 / §6 / §7 blocks and the footer md5 with current output; `RESULT: OK` or the differing rows (U14) |
 | `lint-prose` | no | version strings and `Dx–Dy` ranges in SKILL.md, README, references, delegates vs plugin.json and the decision register (marketplace.json is scanned but carries no version); lists every string checked (U15). Not covered: prose naming sub-commands/features |
 | `lint-handover <handover.md> [--prev <previous.md>]` | no | with `--prev`: every U-id in the previous §4 must still be a row or be named as resolved/transferred; plus free-text cross-checks: §1 states current_node and mentions commits since the footer HEAD, §5 names current_node, §4 resolved ids have no remaining row, exactly one footer, tool-stamped `Generated:` header, no empty action on flagged §7 rows, warns on empty `why it matters` |
@@ -35,4 +39,5 @@ Timestamps are seconds-precision and compared as datetimes (git commit time for 
 
 Dependencies: Python 3.8+, standard library. `jsonschema` is optional (schema layer is skipped with a warning).
 Test: `python3 test_graph_tool.py` (synthetic graph; exercises validate, hops, growth, fold, split, content layer, add-node,
-add-doc, set-status, handover-tables --verify OK/FAIL, lint-handover, hydrate --dry-run).
+add-doc, set-status, handover-tables --verify OK/FAIL, lint-handover, hydrate --dry-run, backlog filter + excluded counts, set-next,
+set-issue, close by decision / by action, the resolves → issue_status invariant).

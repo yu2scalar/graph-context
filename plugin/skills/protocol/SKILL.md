@@ -70,6 +70,7 @@ carry `owner` (`user` | `claude`) and `trigger`; `closed_by` is required when no
 | `docs_scope` | `<design_root>/**/*.md` | globs `/graph:init` reads |
 | `registries[]` | `[]` | `{type, id_pattern, file}`: how decision/issue ids are recognised and where their text lives |
 | `growth_threshold` | 5 | attached decision+issue count at which a split is proposed |
+| `backlog_filter` | absent | default filter for the open issues the Backlog lists (`owner`, `next_only`, `component`); hidden ones are counted (D33) |
 | `install` | set by install | sha256 snapshots for uninstall verification |
 
 Not in config, by decision: `code_roots` (derived: union of component nodes' `code_targets`),
@@ -252,6 +253,11 @@ Purpose: load the full 1-hop / 2-hop neighbourhood and produce the Impact Assess
 | id | name | roots | overview doc | wip |
 |----|------|-------|--------------|-----|
 
+### Backlog (graph-wide, always shown — D33)
+| kind | id | component | state | owner | trigger / parent | next |
+|------|----|-----------|-------|-------|------------------|------|
+Filter line + excluded counts per component; WARNING when nothing carries `next`.
+
 ### Subgraph
 | hop | id | type | wip_status | path from origin |
 |-----|----|------|------------|------------------|
@@ -407,7 +413,7 @@ Session history (from `handover-tables` → operations log): every fold / split 
 
 | Rule | Content |
 |------|---------|
-| **R1 Cross-reference validation** | Executed by `graph_tool.py validate`; the checks are: `nodes[k].id == k` (fix the key, never the id). Every target of `part_of` / `depends_on` / `affects` / `resolves` / `supersedes` and `current_node` exists. No self-edges. `part_of` ≤ 1 and acyclic. `resolves` only decision → issue; `supersedes` only decision → decision. `source_ref` matches some `config.registries[].id_pattern` when registries are defined. Non-component `code_targets` fall under the union of component `code_targets`. Schema-valid (run `python3 -c "import json,jsonschema;jsonschema.Draft202012Validator(json.load(open('${CLAUDE_SKILL_DIR}/schema/graph_schema.json'))).validate(json.load(open('dependency_graph.json')));print('OK')"` when available; otherwise check manually and say so). Schema self-test: `python3 ${CLAUDE_SKILL_DIR}/schema/fixtures/run_fixtures.py` (positive + negative fixtures; must print all PASS). |
+| **R1 Cross-reference validation** | Executed by `graph_tool.py validate`; the checks are: `nodes[k].id == k` (fix the key, never the id). Every target of `part_of` / `depends_on` / `affects` / `resolves` / `supersedes` and `current_node` exists. No self-edges. `part_of` ≤ 1 and acyclic. `resolves` only decision → issue, and its target has `issue_status: resolved`; `supersedes` only decision → decision. `source_ref` matches some `config.registries[].id_pattern` when registries are defined. Non-component `code_targets` fall under the union of component `code_targets`. Schema-valid (run `python3 -c "import json,jsonschema;jsonschema.Draft202012Validator(json.load(open('${CLAUDE_SKILL_DIR}/schema/graph_schema.json'))).validate(json.load(open('dependency_graph.json')));print('OK')"` when available; otherwise check manually and say so). Schema self-test: `python3 ${CLAUDE_SKILL_DIR}/schema/fixtures/run_fixtures.py` (positive + negative fixtures; must print all PASS). |
 | **R2 Hydration** | If `dependency_graph.json` exists, never modify code before `/graph:hydrate <node_id>` of the relevant node with every pre-modification check ticked. If the node does not exist, create it first (init refresh or manual addition passing R1). If the user explicitly asks to skip, state the risk in one sentence, log the skip in Unresolved Edges, proceed. |
 | **R3 Handover fidelity** | Sections 1–7 mandatory; verbatim decisions, identifiers, unresolved edges; empty = `- none`. §3 carries its legend; §4 opens with the "Resolved this session" line; every "who resolves" names a trigger or says none (D19). §2 tables, §6 counts/results and §7 timestamps are generated from the graph, never retyped (D25). |
 | **R4 Interaction language** | Every question, recommendation table, approval request, proposal (split / fold / component) and checklist shown to the user is written in `config.interaction_language` (inferred from CLAUDE.md and the user's messages when unset). Graph contents, handover file, SKILL text stay English. |

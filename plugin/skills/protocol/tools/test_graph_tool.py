@@ -14,7 +14,7 @@ def mk(tmp):
                    "f": {"id": "f", "type": "feature", "name": "Feature F", "docs": ["docs/log.md"], "code_targets": ["src/a.py"], "part_of": ["core"]},
                    "d-001": {"id": "d-001", "type": "decision", "name": "one", "docs": ["docs/log.md"], "code_targets": [], "source_ref": "D-001", "part_of": ["f"], "affects": ["f"], "wip_status": "DONE"},
                    "d-002": {"id": "d-002", "type": "decision", "name": "two", "docs": ["docs/log.md"], "code_targets": [], "source_ref": "D-002", "part_of": ["f"], "affects": ["f"], "supersedes": ["d-001"], "wip_status": "DONE"},
-                   "tbd-01": {"id": "tbd-01", "type": "issue", "name": "q", "docs": ["docs/log.md"], "code_targets": [], "source_ref": "TBD-01", "part_of": ["f"], "affects": ["f"]}}}
+                   "tbd-01": {"id": "tbd-01", "type": "issue", "name": "q", "docs": ["docs/log.md"], "code_targets": [], "source_ref": "TBD-01", "part_of": ["f"], "affects": ["f"], "issue_status": "open", "owner": "user"}}}
     p = os.path.join(tmp, "dependency_graph.json"); gt.save(p, g); return p
 
 def main():
@@ -80,6 +80,36 @@ def main():
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf): rc = gt.cmd_lint_handover(gt.load(p), LH)
         assert rc == 1 and "U1" in buf.getvalue(), buf.getvalue()
+        # D33: backlog, set-next, set-issue, close
+        q = lambda **kw: type("A", (), dict(graph=p, lang="en", **kw))
+        def _run(fn, a):
+            b = io.StringIO()
+            with contextlib.redirect_stdout(b): rc = fn(gt.load(p), a)
+            return rc, b.getvalue()
+        rc, out = _run(gt.cmd_add_node, q(id="i2", type="issue", name="I2", part_of="f", doc=None, code=None, source_ref=None, status=None, next=False, owner="claude", trigger="after step 2"))
+        assert rc == 0 and gt.load(p)["nodes"]["i2"]["issue_status"] == "open", out
+        rc, out = _run(gt.cmd_add_node, q(id="p1", type="function", name="Plan step", part_of="f", doc=None, code=None, source_ref=None, status="PLANNED", next=False, owner=None, trigger=None))
+        assert rc == 0 and gt.load(p)["nodes"]["p1"]["wip_status"] == "PLANNED", out
+        rc, out = _run(gt.cmd_add_node, q(id="x1", type="feature", name="X", part_of="core", doc=None, code=None, source_ref=None, status=None, next=False, owner="user", trigger=None))
+        assert rc == 1 and "x1" not in gt.load(p)["nodes"], "owner on a feature must be refused"
+        rows, exc, _ = gt.backlog(gt.load(p))
+        ids = [r[1] for r in rows]; assert "tbd-01" in ids and "i2" in ids and "p1" in ids and not exc, rows
+        rows, exc, _ = gt.backlog(gt.load(p), owner="user")
+        assert [r[1] for r in rows if r[0] == "issue"] == ["tbd-01"] and exc == {"core": 1}, (rows, exc)
+        assert "Excluded by the filter: core: 1" in gt.backlog_md(gt.load(p), owner="user")
+        assert "WARNING: no item carries `next`" in gt.backlog_md(gt.load(p))
+        rc, _ = _run(gt.cmd_set_next, q(node="p1", off=False)); assert rc == 0 and gt.load(p)["nodes"]["p1"]["next"] is True
+        rows, _, _ = gt.backlog(gt.load(p)); assert rows[0][1] == "p1", rows
+        rc, _ = _run(gt.cmd_set_next, q(node="d-002", off=False)); assert rc == 1, "next on a decision must be refused"
+        rc, _ = _run(gt.cmd_set_issue, q(node="i2", owner="user", trigger="now")); assert rc == 0 and gt.load(p)["nodes"]["i2"]["trigger"] == "now"
+        rc, _ = _run(gt.cmd_set_status, q(node="i2", status="DONE")); assert rc == 1, "set-status on an issue must be refused"
+        rc, out = _run(gt.cmd_close, q(node="tbd-01", state="resolved", by="D-002"))
+        g7 = gt.load(p); assert rc == 0 and g7["nodes"]["tbd-01"]["closed_by"] == "D-002" and "tbd-01" in g7["nodes"]["d-002"]["resolves"], out
+        rc, out = _run(gt.cmd_close, q(node="i2", state="transferred", by="interlock session"))
+        g8 = gt.load(p); assert rc == 0 and g8["nodes"]["i2"]["issue_status"] == "transferred" and "resolves" not in g8["nodes"].get("interlock session", {}), out
+        rows, _, _ = gt.backlog(g8); assert not [r for r in rows if r[0] == "issue"], rows
+        bad = json.loads(json.dumps(g8)); bad["nodes"]["tbd-01"]["issue_status"] = "open"
+        problems, _ = gt.validate(bad, want_schema=False); assert any("must be resolved" in x for x in problems), problems
         print("test_graph_tool: all assertions hold")
     except AssertionError as e:
         ok = False; print("FAIL:", e)

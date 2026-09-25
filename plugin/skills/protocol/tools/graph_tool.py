@@ -3,7 +3,8 @@
 
 Runs the mechanical parts of the graph-context protocol so that Claude executes them instead of
 re-deriving them from prose. Read-only: validate, check, handover-tables (incl. --verify), lint-prose, lint-handover,
-hydrate --dry-run. Writing: hydrate (current_node), fold, split, set-status, add-edge, set-current, add-node, add-doc, add-code.
+hydrate --dry-run, backlog. Writing: hydrate (current_node), fold, split, set-status, add-edge, set-current, add-node, add-doc, add-code,
+set-next, set-issue, close.
 
 Usage (run from the project root that holds dependency_graph.json):
   graph_tool.py validate                      R1 + schema (schema needs `jsonschema`; degrades with a warning)
@@ -13,10 +14,18 @@ Usage (run from the project root that holds dependency_graph.json):
   graph_tool.py handover-tables               Markdown for handover §2 (components+subgraph), §6 lines, §7 table
   graph_tool.py fold <victim> <survivor>      apply a fold, then validate
   graph_tool.py split <node> <child>=<id,id,...> [...]   create function children, move attachments, validate
-  graph_tool.py set-status <node> <DONE|IN_PROGRESS|BLOCKED|none>   change wip_status, validate
+  graph_tool.py set-status <node> <PLANNED|IN_PROGRESS|BLOCKED|DONE|none>   change wip_status, validate
+  graph_tool.py backlog [--owner user|claude] [--next-only] [--component C] [--all]
+                                              graph-wide Backlog view (D33): open issues (filtered; default = config.backlog_filter),
+                                              PLANNED / IN_PROGRESS / BLOCKED / next nodes; excluded issues counted per component
+  graph_tool.py set-next <node> [--off]       set or clear the `next` flag, validate
+  graph_tool.py set-issue <issue> [--owner user|claude] [--trigger TEXT]   set owner / trigger of an issue, validate
+  graph_tool.py close <issue> <resolved|transferred> --by <decision-id|commit|text>
+                                              close an issue; when --by names a decision node, also add <decision>.resolves -> <issue>
   graph_tool.py add-edge <src> <kind> <dst>   add one edge (part_of|depends_on|affects|resolves|supersedes), validate
   graph_tool.py set-current <node|null>       set current_node, validate
   graph_tool.py add-node <id> <type> "<name>" [--part-of P] [--doc PATH ...] [--code PATH ...] [--source-ref ID]
+                     [--status S] [--next] [--owner user|claude] [--trigger TEXT]   (issue nodes get issue_status open)
                                               create a node (the last hand-edit of the JSON), validate
   graph_tool.py handover-tables --verify <handover.md>
                                               check that the pasted §2/§6/§7 blocks in a handover equal current output (R9)
@@ -38,6 +47,7 @@ import argparse, datetime, hashlib, json, os, re, subprocess, sys
 from collections import Counter, defaultdict
 
 EDGES = ("part_of", "depends_on", "affects", "resolves", "supersedes")
+WIP = ("PLANNED", "IN_PROGRESS", "BLOCKED", "DONE")
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCHEMA_PATH = os.path.normpath(os.path.join(HERE, "..", "schema", "graph_schema.json"))
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
@@ -218,6 +228,8 @@ def validate(g, want_schema=True):
         for t in n.get("resolves", []):
             if t in ns and ns[t]["type"] != "issue":
                 problems.append(f"{k}.resolves -> {t} is not an issue")
+            elif t in ns and ns[t].get("issue_status", "open") != "resolved":
+                problems.append(f"{k}.resolves -> {t} but {t}.issue_status is {ns[t].get('issue_status', 'unset')} (must be resolved)")
         for t in n.get("supersedes", []):
             if t in ns and ns[t]["type"] != "decision":
                 problems.append(f"{k}.supersedes -> {t} is not a decision")
@@ -322,6 +334,56 @@ def fold_candidates(g):
             out.append((k, ins[k][0][0], "resolved, no other live in-edges"))
     return out
 
+# ---------------------------------------------------------------- backlog (D33)
+def component_of(ns, k):
+    if ns[k]["type"] == "component":
+        return k
+    chain, _ = parent_chain(ns, k)
+    top = chain[-1] if chain else None
+    if top and ns[top]["type"] == "component":
+        return top
+    for a in ns[k].get("affects", []):  # issue attached by `affects` only
+        if a in ns and a != k:
+            return component_of(ns, a) if ns[a].get("part_of") or ns[a]["type"] == "component" else a
+    return "(none)"
+
+def backlog(g, owner=None, next_only=False, component=None, all_=False):
+    """Return (rows, excluded) — rows: (kind, id, component, state, owner, trigger/parent, next); excluded: Counter component -> n."""
+    ns = g["nodes"]; flt = {} if all_ else dict(g["config"].get("backlog_filter", {}))
+    if owner: flt["owner"] = owner
+    if next_only: flt["next_only"] = True
+    if component: flt["component"] = component
+    rows, excluded = [], Counter()
+    for k, n in sorted(ns.items()):
+        comp = component_of(ns, k)
+        if n["type"] == "issue":
+            if n.get("issue_status", "open") != "open":
+                continue
+            keep = (not flt.get("owner") or n.get("owner") == flt["owner"]) and (not flt.get("next_only") or n.get("next")) \
+                   and (not flt.get("component") or comp == flt["component"])
+            if n.get("next") and not flt.get("component"):
+                keep = True  # a `next` item is never hidden by the owner filter
+            if not keep:
+                excluded[comp] += 1; continue
+            rows.append(("issue", k, comp, "open", n.get("owner", "—"), n.get("trigger", "—"), "next" if n.get("next") else ""))
+        elif n.get("wip_status") in ("PLANNED", "IN_PROGRESS", "BLOCKED") or n.get("next"):
+            if flt.get("component") and comp != flt["component"]:
+                excluded[comp] += 1; continue
+            rows.append((n["type"], k, comp, n.get("wip_status", "—"), "—", "part_of " + (n.get("part_of") or ["—"])[0], "next" if n.get("next") else ""))
+    order = {"next": 0, "": 1}
+    rows.sort(key=lambda r: (order[r[6]], r[0] != "issue", r[2], r[1]))
+    return rows, excluded, flt
+
+def backlog_md(g, **kw):
+    rows, excluded, flt = backlog(g, **kw)
+    out = [table(["kind", "id", "component", "state", "owner", "trigger / parent", "next"], rows)]
+    fdesc = ", ".join(f"{k}={v}" for k, v in sorted(flt.items())) or "none (all open issues)"
+    out.append(f"Filter: {fdesc}. " + ("Excluded by the filter: " + ", ".join(f"{c}: {n}" for c, n in sorted(excluded.items())) + f" (total {sum(excluded.values())}) — run `backlog --all` to list them."
+                                         if excluded else "Excluded by the filter: none."))
+    if not any(r[6] == "next" for r in rows) and not excluded:
+        out.append("WARNING: no item carries `next` (D33) — set one with `set-next <node>`.")
+    return "\n".join(out)
+
 # ---------------------------------------------------------------- markdown helpers
 def table(headers, rows):
     out = ["| " + " | ".join(headers) + " |", "|" + "|".join("---" for _ in headers) + "|"]
@@ -368,6 +430,7 @@ def cmd_hydrate(g, args):
     hop = hops(ns, origin)
     print(f"## Impact Assessment Checklist — {origin}\n")
     print("### Components (always shown — R7)"); print(components_table(ns)); print()
+    print("### Backlog (graph-wide, always shown — D33)"); print(backlog_md(g)); print()
     print("### Subgraph"); print(subgraph_table(ns, hop)); print(SUBGRAPH_LEGEND); print()
     rows = []
     for k in sorted(hop, key=lambda x: (hop[x][0], x)):
@@ -667,7 +730,16 @@ def cmd_add_node(g, args):
     n = {"id": args.id, "type": args.type, "name": args.name, "docs": args.doc or [], "code_targets": args.code or []}
     if args.part_of: n["part_of"] = [args.part_of]
     if args.source_ref: n["source_ref"] = args.source_ref
-    if args.status: n["wip_status"] = args.status
+    if getattr(args, "status", None):
+        if args.status not in WIP: print(f"ERROR: status must be one of {WIP}"); return 1
+        n["wip_status"] = args.status
+    if getattr(args, "next", False): n["next"] = True
+    if args.type == "issue":
+        n["issue_status"] = "open"
+        if getattr(args, "owner", None): n["owner"] = args.owner
+        if getattr(args, "trigger", None): n["trigger"] = args.trigger
+    elif getattr(args, "owner", None) or getattr(args, "trigger", None):
+        print("ERROR: --owner / --trigger are for issue nodes only"); return 1
     ns[args.id] = n
     b4 = md5(args.graph); save(args.graph, g); log_op(g, f"add-node {args.id} ({args.type}) part_of={args.part_of}", args.graph, b4)
     print(f"added `{args.id}` ({args.type})")
@@ -720,7 +792,8 @@ def cmd_split(g, args):
 def cmd_set_status(g, args):
     ns = g["nodes"]
     if args.node not in ns: print(f"ERROR: `{args.node}` not in nodes"); return 1
-    if args.status not in ("DONE", "IN_PROGRESS", "BLOCKED", "none"): print("ERROR: status must be DONE|IN_PROGRESS|BLOCKED|none"); return 1
+    if args.status not in WIP + ("none",): print("ERROR: status must be PLANNED|IN_PROGRESS|BLOCKED|DONE|none"); return 1
+    if ns[args.node]["type"] == "issue": print("ERROR: issues carry issue_status; use `close`"); return 1
     old = ns[args.node].get("wip_status")
     if args.status == "none": ns[args.node].pop("wip_status", None)
     else: ns[args.node]["wip_status"] = args.status
@@ -747,6 +820,52 @@ def cmd_set_current(g, args):
     print(f"current_node: {old} -> {v}")
     return cmd_validate(g, args)
 
+def cmd_backlog(g, args):
+    print("## Backlog (D33)")
+    print(backlog_md(g, owner=args.owner, next_only=args.next_only, component=args.component, all_=args.all))
+    return 0
+
+def cmd_set_next(g, args):
+    ns = g["nodes"]
+    if args.node not in ns: print(f"ERROR: `{args.node}` not in nodes"); return 1
+    if ns[args.node]["type"] in ("component", "decision"): print("ERROR: `next` is not allowed on component / decision nodes"); return 1
+    if args.off: ns[args.node].pop("next", None)
+    else: ns[args.node]["next"] = True
+    b4 = md5(args.graph); save(args.graph, g); log_op(g, f"set-next {args.node} {'off' if args.off else 'on'}", args.graph, b4)
+    print(f"{args.node}.next: {'cleared' if args.off else 'true'}")
+    return cmd_validate(g, args)
+
+def cmd_set_issue(g, args):
+    ns = g["nodes"]
+    if args.node not in ns or ns[args.node]["type"] != "issue": print(f"ERROR: `{args.node}` is not an issue node"); return 1
+    if not (args.owner or args.trigger): print("ERROR: give --owner and/or --trigger"); return 1
+    n = ns[args.node]; ch = []
+    if args.owner: ch.append(f"owner {n.get('owner')} -> {args.owner}"); n["owner"] = args.owner
+    if args.trigger: ch.append(f"trigger -> {args.trigger!r}"); n["trigger"] = args.trigger
+    b4 = md5(args.graph); save(args.graph, g); log_op(g, f"set-issue {args.node} " + "; ".join(ch), args.graph, b4)
+    print(f"{args.node}: " + "; ".join(ch))
+    return cmd_validate(g, args)
+
+def cmd_close(g, args):
+    ns = g["nodes"]
+    if args.node not in ns or ns[args.node]["type"] != "issue": print(f"ERROR: `{args.node}` is not an issue node"); return 1
+    if args.state not in ("resolved", "transferred"): print("ERROR: state must be resolved|transferred"); return 1
+    n = ns[args.node]; by = args.by; dec = None
+    if by in ns and ns[by]["type"] == "decision": dec = by
+    else:
+        m = [k for k, x in ns.items() if x["type"] == "decision" and x.get("source_ref") == by]
+        dec = m[0] if len(m) == 1 else None
+    if dec and args.state != "resolved": print("ERROR: a decision resolves an issue; use state `resolved`"); return 1
+    old = n.get("issue_status"); n["issue_status"] = args.state; n["closed_by"] = ns[dec].get("source_ref", dec) if dec else by
+    n.pop("next", None)
+    if dec:
+        lst = ns[dec].setdefault("resolves", [])
+        if args.node not in lst: lst.append(args.node)
+    b4 = md5(args.graph); save(args.graph, g)
+    log_op(g, f"close {args.node} {old} -> {args.state} by {n['closed_by']}" + (f"; {dec}.resolves += {args.node}" if dec else ""), args.graph, b4)
+    print(f"{args.node}: {old} -> {args.state} (closed_by {n['closed_by']})" + (f"; added {dec}.resolves -> {args.node}" if dec else ""))
+    return cmd_validate(g, args)
+
 # ---------------------------------------------------------------- main
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -762,6 +881,11 @@ def main(argv=None):
     p = sp("lint-handover", "handover"); p.add_argument("--prev", default=None, metavar="PREV_HANDOVER_MD")
     sp("add-doc", "node", "path"); sp("add-code", "node", "path")
     p = sp("add-node", "id", "type", "name"); p.add_argument("--part-of", dest="part_of"); p.add_argument("--doc", action="append"); p.add_argument("--code", action="append"); p.add_argument("--source-ref", dest="source_ref"); p.add_argument("--status")
+    p.add_argument("--next", action="store_true"); p.add_argument("--owner", choices=["user", "claude"]); p.add_argument("--trigger")
+    p = sp("backlog"); p.add_argument("--owner", choices=["user", "claude"]); p.add_argument("--next-only", dest="next_only", action="store_true"); p.add_argument("--component"); p.add_argument("--all", action="store_true")
+    p = sp("set-next", "node"); p.add_argument("--off", action="store_true")
+    p = sp("set-issue", "node"); p.add_argument("--owner", choices=["user", "claude"]); p.add_argument("--trigger")
+    p = sp("close", "node", "state"); p.add_argument("--by", required=True)
     for name, a in ap._subparsers._group_actions[0].choices.items():
         if name == "handover-tables": a.add_argument("--verify", default=None, metavar="HANDOVER_MD")
         if name == "hydrate": a.add_argument("--dry-run", dest="dry_run", action="store_true")
@@ -775,7 +899,8 @@ def main(argv=None):
     rc = {"validate": cmd_validate, "hydrate": cmd_hydrate, "check": cmd_check, "handover-tables": cmd_handover_tables,
           "fold": cmd_fold, "split": cmd_split, "set-status": cmd_set_status, "add-edge": cmd_add_edge, "set-current": cmd_set_current,
           "add-node": cmd_add_node, "lint-prose": cmd_lint_prose, "lint-handover": cmd_lint_handover,
-          "add-doc": cmd_add_path, "add-code": cmd_add_path}[args.cmd](g, args)
+          "add-doc": cmd_add_path, "add-code": cmd_add_path, "backlog": cmd_backlog, "set-next": cmd_set_next,
+          "set-issue": cmd_set_issue, "close": cmd_close}[args.cmd](g, args)
     after = md5(args.graph)
     print(f"\n<!-- graph_tool {args.cmd} @{git_head()} graph md5 {before}" + (f" -> {after} (WRITTEN)" if after != before else " (unchanged)") + " -->")
     return rc

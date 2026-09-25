@@ -221,6 +221,16 @@
           "type": "array",
           "items": { "$ref": "#/$defs/registry" }
         },
+        "backlog_filter": {
+          "description": "Project default for which open issues the Backlog view lists (D33). Absent = all open issues. PLANNED / IN_PROGRESS / BLOCKED / next nodes are always listed; whatever the filter excludes is printed as a count per component. Command options override it per call.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "owner": { "type": "string", "enum": ["user", "claude"] },
+            "next_only": { "type": "boolean" },
+            "component": { "$ref": "#/$defs/nodeId" }
+          }
+        },
         "growth_threshold": {
           "description": "Number of attached decision + issue nodes at which /graph-handover proposes splitting a feature/function into children. Default 5.",
           "type": "integer",

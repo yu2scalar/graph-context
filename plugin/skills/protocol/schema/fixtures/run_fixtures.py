@@ -89,6 +89,9 @@ bad("bad owner rejected", lambda b: b["nodes"]["tbd-24"].__setitem__("owner", "t
 bad("next on decision rejected", lambda b: b["nodes"]["d-022"].__setitem__("next", True))
 bad("next on component rejected", lambda b: b["nodes"]["core"].__setitem__("next", True))
 bad("non-boolean next rejected", lambda b: b["nodes"]["commit-protocol"].__setitem__("next", "yes"))
+bad("backlog_filter OK", lambda b: b["config"].__setitem__("backlog_filter", {"owner": "user", "next_only": False, "component": "core"}), True)
+bad("backlog_filter unknown key rejected", lambda b: b["config"].__setitem__("backlog_filter", {"status": "open"}))
+bad("backlog_filter bad owner rejected", lambda b: b["config"].__setitem__("backlog_filter", {"owner": "team"}))
 
 print(f"\n{sum(results)}/{len(results)} fixtures as expected")
 sys.exit(0 if all(results) else 1)

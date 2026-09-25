@@ -17,6 +17,7 @@
 | `docs_scope` | `<design_root>/**/*.md` | globs init reads |
 | `registries[]` | `[]` | `{type: decision\|issue, id_pattern: <regex>, file: <path>}` — how registry ids are recognised and where their text lives |
 | `growth_threshold` | 5 | attached decision+issue count at which a split is proposed |
+| `backlog_filter` | absent (= all open issues) | `{owner: user\|claude, next_only: bool, component: <id>}` — project default for which open issues the Backlog lists; excluded ones are counted per component; command options override (D33) |
 | `install` | set by install | `{installed_at, skill_version, claude_md_sha256_before, gitignore_sha256_before}` |
 
 Deliberately absent: `code_roots` (derived: union of component nodes' `code_targets`), `project_name`, `version`.
@@ -50,6 +51,6 @@ children and the parent becomes an index node. Superseded decisions and resolved
 surviving decision (`folded[]`) on approval; text stays in the registry.
 
 ## Invariants enforced by the skill (R1), not expressible in JSON Schema
-key == id · every edge target exists · no self-edges · `part_of` acyclic · `resolves` decision→issue ·
+key == id · every edge target exists · no self-edges · `part_of` acyclic · `resolves` decision→issue (target `issue_status: resolved`) ·
 `supersedes` decision→decision · `source_ref` matches a registry pattern when registries exist ·
 non-component `code_targets` under some component's roots.
