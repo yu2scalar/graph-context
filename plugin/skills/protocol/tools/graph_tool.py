@@ -267,6 +267,8 @@ def validate(g, want_schema=True, drift=True):
                     problems.append(f"{k}: code_target `{c}` outside component roots")
         if n["type"] in ("decision", "issue") and not n.get("part_of") and not n.get("affects"):
             warnings.append(f"{k}: {n['type']} attached to nothing (R5)")
+        if not n.get("file"):
+            warnings.append(f"{k}: no entity file (P1 — run `migrate`)")
         if n.get("file"):
             f = n["file"]
             if not os.path.exists(f):
@@ -935,7 +937,21 @@ def cmd_add_node(g, args):
     elif getattr(args, "owner", None) or getattr(args, "trigger", None):
         print("ERROR: --owner / --trigger are for issue nodes only"); return 1
     ns[args.id] = n
-    b4 = md5(args.graph); guarded_save(args.graph, g); log_op(g, f"add-node {args.id} ({args.type}) part_of={args.part_of}", args.graph, b4)
+    path = os.path.join(ENTITY_DIR, f"{args.id}.md")  # every node has its entity file (P1); structure text = --summary or NOT_RECORDED
+    if not os.path.exists(path):
+        heads = HEADINGS.get(args.type, ["Summary"])
+        sec = {h: NOT_RECORDED for h in heads}
+        if getattr(args, "summary", None): sec["Summary" if "Summary" in heads else heads[0]] = args.summary
+        os.makedirs(ENTITY_DIR, exist_ok=True)
+        open(path, "w", encoding="utf-8").write(render_entity(args.id, args.type, args.name, sec, now_iso(), how="add-node"))
+        n["file"] = path; n["sha256"] = sha256_of(path)
+    b4 = md5(args.graph)
+    try:
+        guarded_save(args.graph, g)
+    except WriteRefused:
+        if n.get("file") and os.path.exists(n["file"]): os.remove(n["file"])
+        raise
+    log_op(g, f"add-node {args.id} ({args.type}) part_of={args.part_of}", args.graph, b4)
     print(f"added `{args.id}` ({args.type})")
     return cmd_validate(g, args)
 
@@ -1063,6 +1079,23 @@ def cmd_attach(g, args):
     ns = g["nodes"]
     if args.node not in ns: print(f"ERROR: `{args.node}` not in nodes"); return 1
     n = ns[args.node]
+    if n.get("file") and args.as_plan and n["type"] in ("feature", "function"):  # convert: add the plan sections to the existing file
+        sections = dict(sp_.split("=", 1) for sp_ in (args.section or []) if "=" in sp_)
+        missing = [h for h in HEADINGS["plan"] if not sections.get(h, "").strip()]
+        if missing: print(f"ERROR: plan needs sections {missing}"); return 1
+        f = n["file"]
+        if sha256_of(f) != n.get("sha256"): print(f"ERROR: `{f}` changed outside graph_tool"); return 1
+        old = open(f, encoding="utf-8").read()
+        for h, t in sections.items(): append_section(f, h.strip(), t)
+        txt = open(f, encoding="utf-8").read().rstrip("\n") + f"\n- {now_iso()} converted to plan by attach --as-plan\n"
+        txt = re.sub(r"^(<!-- entity \S+ · )\w+( ·)", r"\1plan\2", txt, count=1, flags=re.M)
+        open(f, "w", encoding="utf-8").write(txt); n["type"] = "plan"; n["sha256"] = sha256_of(f)
+        b4 = md5(args.graph)
+        try:
+            guarded_save(args.graph, g)
+        except WriteRefused:
+            open(f, "w", encoding="utf-8").write(old); raise
+        log_op(g, f"attach {args.node} --as-plan (existing file)", args.graph, b4); print(f"converted `{args.node}` to plan"); return cmd_validate(g, args)
     if n.get("file"): print(f"ERROR: `{args.node}` already has {n['file']} — use append"); return 1
     if args.as_plan:
         if n["type"] not in ("feature", "function"): print("ERROR: --as-plan converts a feature / function node only"); return 1
@@ -1338,6 +1371,32 @@ def cmd_rename(g, args):
     b4 = md5(args.graph); guarded_save(args.graph, g); log_op(g, f"rename {args.node}: {old!r} -> {args.name!r}", args.graph, b4)
     print(f"{args.node}: renamed"); return cmd_validate(g, args)
 
+def cmd_config(g, args):
+    """Config edits as a command (rule r2): `config get [key]`, `config set <dotted.key> <json>`; validated before saving."""
+    c = g.setdefault("config", {})
+    def walk(key, create=False):
+        parts = key.split("."); cur = c
+        for p_ in parts[:-1]:
+            cur = cur[int(p_)] if isinstance(cur, list) else (cur.setdefault(p_, {}) if create else cur[p_])
+        return cur, parts[-1]
+    if args.action == "get":
+        if not args.key: print(json.dumps(c, indent=2, ensure_ascii=False)); return 0
+        try:
+            cur, last = walk(args.key); print(json.dumps(cur[int(last)] if isinstance(cur, list) else cur[last], indent=2, ensure_ascii=False)); return 0
+        except (KeyError, IndexError, ValueError): print(f"ERROR: no config key `{args.key}`"); return 1
+    if args.action != "set" or not args.key or args.value is None: print("ERROR: config get [key] | config set <key> <json-value>"); return 1
+    try: val = json.loads(args.value)
+    except json.JSONDecodeError as e: print(f"ERROR: value is not JSON: {e}"); return 1
+    try:
+        cur, last = walk(args.key, create=True)
+    except (KeyError, IndexError, ValueError): print(f"ERROR: bad key path `{args.key}`"); return 1
+    old = (cur[int(last)] if isinstance(cur, list) else cur.get(last)) if True else None
+    if isinstance(cur, list): cur[int(last)] = val
+    else: cur[last] = val
+    b4 = md5(args.graph); guarded_save(args.graph, g)
+    log_op(g, f"config set {args.key}: {json.dumps(old, ensure_ascii=False)[:80]} -> {json.dumps(val, ensure_ascii=False)[:80]}", args.graph, b4)
+    print(f"config {args.key} = {json.dumps(val, ensure_ascii=False)[:120]}"); return cmd_validate(g, args)
+
 def cmd_append(g, args):
     """Entity files are append-only: add a dated line under Log (corrections, status notes, later user words)."""
     ns = g["nodes"]
@@ -1438,7 +1497,7 @@ def main(argv=None):
     p = sp("lint-handover", "handover"); p.add_argument("--prev", default=None, metavar="PREV_HANDOVER_MD")
     sp("add-doc", "node", "path"); sp("add-code", "node", "path")
     p = sp("add-node", "id", "type", "name"); p.add_argument("--part-of", dest="part_of"); p.add_argument("--doc", action="append"); p.add_argument("--code", action="append"); p.add_argument("--source-ref", dest="source_ref"); p.add_argument("--status")
-    p.add_argument("--next", action="store_true"); p.add_argument("--owner", choices=["user", "claude"]); p.add_argument("--trigger")
+    p.add_argument("--next", action="store_true"); p.add_argument("--owner", choices=["user", "claude"]); p.add_argument("--trigger"); p.add_argument("--summary")
     p = sp("backlog"); p.add_argument("--owner", choices=["user", "claude"]); p.add_argument("--next-only", dest="next_only", action="store_true"); p.add_argument("--component"); p.add_argument("--all", action="store_true")
     p = sp("set-next", "node"); p.add_argument("--off", action="store_true")
     p = sp("set-issue", "node"); p.add_argument("--owner", choices=["user", "claude"]); p.add_argument("--trigger")
@@ -1451,6 +1510,7 @@ def main(argv=None):
     p = sp("render"); p.add_argument("--check", action="store_true")
     p = sp("migrate"); p.add_argument("--dry-run", dest="dry_run", action="store_true"); p.add_argument("--plans", action="store_true"); p.add_argument("--retire-registry", dest="retire_registry", metavar="FILE"); p.add_argument("--strip-graph-copies", dest="strip_graph_copies", action="store_true")
     p = sp("rename", "node", "name")
+    p = sp("config", "action"); p.add_argument("key", nargs="?"); p.add_argument("value", nargs="?")
     for name, a in ap._subparsers._group_actions[0].choices.items():
         if name == "handover-tables": a.add_argument("--verify", default=None, metavar="HANDOVER_MD")
         if name == "hydrate": a.add_argument("--dry-run", dest="dry_run", action="store_true")
@@ -1466,7 +1526,7 @@ def main(argv=None):
           "fold": cmd_fold, "split": cmd_split, "set-status": cmd_set_status, "add-edge": cmd_add_edge, "set-current": cmd_set_current,
           "add-node": cmd_add_node, "lint-prose": cmd_lint_prose, "lint-handover": cmd_lint_handover,
           "add-doc": cmd_add_path, "add-code": cmd_add_path, "backlog": cmd_backlog, "set-next": cmd_set_next,
-          "set-issue": cmd_set_issue, "close": cmd_close, "add": cmd_add, "append": cmd_append, "attach": cmd_attach, "migrate": cmd_migrate, "rename": cmd_rename, "render": cmd_render}[args.cmd](g, args)
+          "set-issue": cmd_set_issue, "close": cmd_close, "add": cmd_add, "append": cmd_append, "attach": cmd_attach, "migrate": cmd_migrate, "rename": cmd_rename, "config": cmd_config, "render": cmd_render}[args.cmd](g, args)
     except WriteRefused as e:
         print("## write refused — the graph would be invalid; nothing was written (U31)")
         print(table(["severity", "finding"], [("error", p) for p in e.args[0]]))

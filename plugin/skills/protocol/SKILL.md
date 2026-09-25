@@ -95,6 +95,8 @@ registers, `current.md`, plans, the public register) are generated. Therefore:
   `migrate --plans` (plan documents into plan entities), `migrate --retire-registry <file>` (hand-written register into
   entity logs, then removed).
 - Every write is validated before it is saved; a refused write changes nothing.
+- **Everything through a command (rule r2):** config edits with `config set <key> <json>`; structure nodes with `add-node … --summary`
+  (it writes the entity file too). If an operation has no command, add the command (with a test) first — no ad-hoc scripts.
 - Claude memory holds preferences and pointers only, never project facts (P5).
 - Hydrate lists each subgraph node's entity file first — read those before anything else.
 

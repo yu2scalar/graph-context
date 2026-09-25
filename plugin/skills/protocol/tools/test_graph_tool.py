@@ -178,6 +178,11 @@ def main():
         assert rc == 0 and not os.path.exists("docs/reg.md") and "note about it" in open(g18["nodes"]["tbd-01"]["file"]).read() and "docs/reg.md" not in g18["nodes"]["tbd-01"]["docs"], out
         rc, out = _run(gt.cmd_append, q(node="core", text="Core runtime of the product", section="Summary"))
         assert rc == 0 and gt.entity_sections(gt.load(p)["nodes"]["core"]["file"])["Summary"] == "Core runtime of the product", out
+        rc, out = _run(gt.cmd_config, q(action="set", key="growth_threshold", value="7")); assert rc == 0 and gt.load(p)["config"]["growth_threshold"] == 7, out
+        rc, out = _run(gt.cmd_config, q(action="set", key="growth_threshold", value="0")); assert rc == 1 and gt.load(p)["config"]["growth_threshold"] == 7, "invalid config must be refused"
+        rc, out = _run(gt.cmd_config, q(action="set", key="registries.0.public_column", value="3")); assert rc == 0 and gt.load(p)["config"]["registries"][0]["public_column"] == 3, out
+        rc, out = _run(gt.cmd_add_node, q(id="h", type="function", name="H", part_of="f", doc=None, code=None, source_ref=None, status="PLANNED", next=False, owner=None, trigger=None, summary="does H"))
+        gh = gt.load(p)["nodes"]["h"]; assert rc == 0 and gh["file"] == "docs/entities/h.md" and gt.entity_sections(gh["file"])["Summary"] == "does H", out
         print("test_graph_tool: all assertions hold")
     except AssertionError as e:
         ok = False; print("FAIL:", e)

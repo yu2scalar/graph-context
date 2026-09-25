@@ -40,6 +40,7 @@
 | D34 | Working rules: R-a record, then ask — a question to the user is asked only after the node it concerns is written, citing the node id, and the answer updates that node; R-b plans are nodes — every not-yet-started step is a PLANNED node `part_of` its feature, ordered by `depends_on`, the next one flagged `next` | — | active |
 | D35 | Issue state is stored on the issue node: `issue_status` open | resolves u33 | active |
 | D36 | Integrity-first store: each decision, issue, plan and rule is one entity file written only by graph_tool (validated before saving, sha256-checked); status and edges live only in the graph; registers and other readable documents are generated; adding an entity first lists the existing ones so duplicates are caught. | supersedes d29 | active |
+| D37 | Fold hides instead of deleting: every earlier folded decision / issue is restored as a hidden history node linked by supersedes / resolves; the folded[] field is dropped; resolved issues are hidden by default, transferred ones stay visible. | resolves u41, u42, u43 | decided, not yet implemented |
 | OP1 | — | — | folded into D5 |
 | OP2 | — | — | folded into D10 |
 | OP3 | — | — | folded into D11 |
