@@ -176,6 +176,8 @@ def main():
         rc, out = _run(gt.cmd_migrate, q(dry_run=False, plans=False, retire_registry="docs/reg.md"))
         g18 = gt.load(p)
         assert rc == 0 and not os.path.exists("docs/reg.md") and "note about it" in open(g18["nodes"]["tbd-01"]["file"]).read() and "docs/reg.md" not in g18["nodes"]["tbd-01"]["docs"], out
+        rc, out = _run(gt.cmd_append, q(node="core", text="Core runtime of the product", section="Summary"))
+        assert rc == 0 and gt.entity_sections(gt.load(p)["nodes"]["core"]["file"])["Summary"] == "Core runtime of the product", out
         print("test_graph_tool: all assertions hold")
     except AssertionError as e:
         ok = False; print("FAIL:", e)

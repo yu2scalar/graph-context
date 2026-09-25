@@ -274,6 +274,9 @@ def validate(g, want_schema=True, drift=True):
             else:
                 if n.get("sha256") and sha256_of(f) != n["sha256"]:
                     problems.append(f"{k}: entity file `{f}` changed outside graph_tool (sha256 mismatch) — P2; restore it or record the change with `append`")
+                copied = [h for h in ("Docs", "Code") if h in entity_sections(f)]
+                if copied:
+                    problems.append(f"{k}: entity file `{f}` holds sections {copied} that copy graph fields (P1) — run `migrate --strip-graph-copies`")
                 if entity_title(f) != n["name"]:
                     problems.append(f"{k}: name differs from the heading of `{f}` (the name is a copy of the heading; use `rename`)")
                 missing = [h for h in HEADINGS.get(n["type"], []) + ["Log"] if h not in entity_sections(f)]
@@ -1113,9 +1116,7 @@ def migrate_sections(g, k, rows):
     and whose file holds a row for the id; every copy verbatim with file:line; folded ids' rows; quotes 「…」 collected."""
     n = g["nodes"][k]; regs = g["config"].get("registries", []); t = n["type"]
     if t not in ("decision", "issue"):
-        sec = {"Summary": NOT_RECORDED + " — the name is the heading"}
-        if n.get("docs"): sec["Docs"] = "\n".join(f"- `{d}`" for d in n["docs"])
-        if n.get("code_targets"): sec["Code"] = "\n".join(f"- `{c}`" for c in n["code_targets"])
+        sec = {"Summary": NOT_RECORDED + " — the name is the heading"}  # docs / code_targets stay in the graph only (P1)
         if t == "plan": sec.update({"Goal": NOT_RECORDED, "Approval": NOT_RECORDED})
         if t == "rule": sec.update({"Statement": n["name"], "Source": NOT_RECORDED})
         return sec, None
@@ -1266,8 +1267,34 @@ def retire_registry(g, args):
     log_op(g, f"migrate --retire-registry {f}: {len(moves)} lines moved into entity logs; registries repointed to generated views; file removed", args.graph, b4)
     return cmd_validate(g, args)
 
+def strip_graph_copies(g, args):
+    """Remove `## Docs` / `## Code` sections that an earlier migrate copied from graph fields (P1); logged in each file."""
+    ns = g["nodes"]; backup = {}; done = []
+    for k, n in sorted(ns.items()):
+        f = n.get("file")
+        if not f or not os.path.exists(f): continue
+        t = open(f, encoding="utf-8").read()
+        new = re.sub(r"\n## (Docs|Code)\n(?:(?!\n## ).)*", "", t, flags=re.S)
+        if new != t:
+            if sha256_of(f) != n.get("sha256"): print(f"ERROR: {f} changed outside graph_tool"); return 1
+            backup[f] = t
+            new = new.rstrip("\n") + f"\n- {now_iso()} removed `## Docs` / `## Code` sections copied from the graph by the first migrate (P1: they live only in the graph)\n"
+            if not args.dry_run: open(f, "w", encoding="utf-8").write(new); n["sha256"] = sha256_of(f)
+            done.append(k)
+    print(f"## migrate --strip-graph-copies{' --dry-run' if args.dry_run else ''}: {len(done)} entity files")
+    if args.dry_run or not done: return 0
+    b4 = md5(args.graph)
+    try:
+        guarded_save(args.graph, g)
+    except WriteRefused:
+        for f, t in backup.items(): open(f, "w", encoding="utf-8").write(t)
+        raise
+    log_op(g, f"migrate --strip-graph-copies: {len(done)} entity files", args.graph, b4)
+    return cmd_validate(g, args)
+
 def cmd_migrate(g, args):
     """Give every node without an entity file its file, mechanically and reproducibly (no judgment, no paraphrase)."""
+    if getattr(args, "strip_graph_copies", False): return strip_graph_copies(g, args)
     if getattr(args, "plans", False): return migrate_plans(g, args)
     if getattr(args, "retire_registry", None): return retire_registry(g, args)
     ns = g["nodes"]; rows = scan_rows(g); todo = sorted(k for k, n in ns.items() if not n.get("file"))
@@ -1318,7 +1345,12 @@ def cmd_append(g, args):
     n = ns[args.node]; f = n["file"]
     if sha256_of(f) != n.get("sha256"): print(f"ERROR: `{f}` was changed outside graph_tool; resolve that first (validate shows it)"); return 1
     old = open(f, encoding="utf-8").read()
-    new = old.rstrip("\n") + f"\n- {now_iso()} {args.text}\n"
+    if getattr(args, "section", None):  # a newer version of a section: the last section with a heading is the current one
+        i = old.rfind("\n## Log")
+        new = old[:i] + f"\n## {args.section}\n{args.text.strip()}\n" + old[i:]
+        new = new.rstrip("\n") + f"\n- {now_iso()} section `{args.section}` added (supersedes any earlier `{args.section}`)\n"
+    else:
+        new = old.rstrip("\n") + f"\n- {now_iso()} {args.text}\n"
     open(f, "w", encoding="utf-8").write(new); n["sha256"] = sha256_of(f)
     b4 = md5(args.graph)
     try:
@@ -1414,10 +1446,10 @@ def main(argv=None):
     p = sp("add", "id", "type", "name"); p.add_argument("--part-of", dest="part_of"); p.add_argument("--source-ref", dest="source_ref"); p.add_argument("--status")
     p.add_argument("--owner", choices=["user", "claude"]); p.add_argument("--trigger"); p.add_argument("--section", action="append")
     p.add_argument("--new-not-duplicate", dest="new_not_duplicate"); p.add_argument("--duplicate-of", dest="duplicate_of")
-    p = sp("append", "node", "text")
+    p = sp("append", "node", "text"); p.add_argument("--section", default=None)
     p = sp("attach", "node"); p.add_argument("--section", action="append"); p.add_argument("--as-plan", dest="as_plan", action="store_true")
     p = sp("render"); p.add_argument("--check", action="store_true")
-    p = sp("migrate"); p.add_argument("--dry-run", dest="dry_run", action="store_true"); p.add_argument("--plans", action="store_true"); p.add_argument("--retire-registry", dest="retire_registry", metavar="FILE")
+    p = sp("migrate"); p.add_argument("--dry-run", dest="dry_run", action="store_true"); p.add_argument("--plans", action="store_true"); p.add_argument("--retire-registry", dest="retire_registry", metavar="FILE"); p.add_argument("--strip-graph-copies", dest="strip_graph_copies", action="store_true")
     p = sp("rename", "node", "name")
     for name, a in ap._subparsers._group_actions[0].choices.items():
         if name == "handover-tables": a.add_argument("--verify", default=None, metavar="HANDOVER_MD")
