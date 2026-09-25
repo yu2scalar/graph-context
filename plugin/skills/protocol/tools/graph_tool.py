@@ -650,7 +650,8 @@ def cmd_lint_prose(g, args):
     for f in files:
         if not os.path.exists(f): continue
         rel = os.path.relpath(f, plugin_root); t = open(f, encoding="utf-8").read()
-        for v in set(re.findall(r"Status: \**v(\d+\.\d+\.\d+)", t)) | set(re.findall(r"Current version: \*\*(\d+\.\d+\.\d+)\*\*", t)):
+        SV = r"(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)"  # semver incl. pre-release (3.3.0-dev.1)
+        for v in set(re.findall(r"Status: \**v" + SV, t)) | set(re.findall(r"Current version: \*\*" + SV + r"\*\*", t)):
             checked.append((rel, f"version {v}"))
             if v != ver: problems.append((rel, f"version string {v} != plugin.json {ver}"))
         for a, b in re.findall(r"D(\d+)[–-]D(\d+)", t):
