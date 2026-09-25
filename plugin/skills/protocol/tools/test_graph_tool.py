@@ -142,6 +142,11 @@ def main():
         open("docs/views/decisions.md", "a").write("hand\n")
         rc, out = _run(gt.cmd_render, q(check=True)); assert rc == 1 and "DRIFT" in out, out
         probs, _ = gt.validate(gt.load(p), want_schema=False, drift=True)
+        rc, out = _run(gt.cmd_attach, q(node="d-002", section=sec, as_plan=False))
+        assert rc == 0 and gt.load(p)["nodes"]["d-002"]["file"] == "docs/entities/d-002.md", out
+        rc, out = _run(gt.cmd_attach, q(node="d-002", section=sec, as_plan=False)); assert rc == 1, "attach twice must be refused"
+        rc, out = _run(gt.cmd_attach, q(node="g", section=["Goal=G", "Approval=user OK"], as_plan=True))
+        assert rc == 0 and gt.load(p)["nodes"]["g"]["type"] == "plan", out
         print("test_graph_tool: all assertions hold")
     except AssertionError as e:
         ok = False; print("FAIL:", e)

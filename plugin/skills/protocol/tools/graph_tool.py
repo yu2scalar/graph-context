@@ -1025,6 +1025,38 @@ def cmd_add(g, args):
     print(f"added `{args.id}` ({args.type}) with {path}")
     return cmd_validate(g, args)
 
+def cmd_attach(g, args):
+    """Migration: give an existing decision / issue / plan / rule node its entity file (P1). `--as-plan` turns a
+    feature / function node that represents a plan into a `plan` node (P3b). The text comes from --section only."""
+    ns = g["nodes"]
+    if args.node not in ns: print(f"ERROR: `{args.node}` not in nodes"); return 1
+    n = ns[args.node]
+    if n.get("file"): print(f"ERROR: `{args.node}` already has {n['file']} — use append"); return 1
+    if args.as_plan:
+        if n["type"] not in ("feature", "function"): print("ERROR: --as-plan converts a feature / function node only"); return 1
+        n["type"] = "plan"
+    if n["type"] not in ENTITY_TYPES: print(f"ERROR: `{args.node}` is a {n['type']}; entity files are for {ENTITY_TYPES}"); return 1
+    sections = {}
+    for spec in args.section or []:
+        if "=" not in spec: print(f"ERROR: --section wants Heading=text, got `{spec[:40]}`"); return 1
+        h, t = spec.split("=", 1); sections[h.strip()] = t
+    missing = [h for h in HEADINGS[n["type"]] if not sections.get(h, "").strip()]
+    if missing: print(f"ERROR: {n['type']} needs sections {missing}"); return 1
+    path = os.path.join(ENTITY_DIR, f"{args.node}.md")
+    if os.path.exists(path): print(f"ERROR: `{path}` already exists"); return 1
+    os.makedirs(ENTITY_DIR, exist_ok=True)
+    title = n["name"]
+    open(path, "w", encoding="utf-8").write(render_entity(args.node, n["type"], title, sections, now_iso()))
+    n["file"] = path; n["sha256"] = sha256_of(path)
+    b4 = md5(args.graph)
+    try:
+        guarded_save(args.graph, g)
+    except WriteRefused:
+        os.remove(path); raise
+    log_op(g, f"attach {args.node} ({n['type']}) file={path}" + (" (converted to plan)" if args.as_plan else ""), args.graph, b4)
+    print(f"attached {path} to `{args.node}`")
+    return cmd_validate(g, args)
+
 def cmd_append(g, args):
     """Entity files are append-only: add a dated line under Log (corrections, status notes, later user words)."""
     ns = g["nodes"]
@@ -1129,6 +1161,7 @@ def main(argv=None):
     p.add_argument("--owner", choices=["user", "claude"]); p.add_argument("--trigger"); p.add_argument("--section", action="append")
     p.add_argument("--new-not-duplicate", dest="new_not_duplicate"); p.add_argument("--duplicate-of", dest="duplicate_of")
     p = sp("append", "node", "text")
+    p = sp("attach", "node"); p.add_argument("--section", action="append"); p.add_argument("--as-plan", dest="as_plan", action="store_true")
     p = sp("render"); p.add_argument("--check", action="store_true")
     for name, a in ap._subparsers._group_actions[0].choices.items():
         if name == "handover-tables": a.add_argument("--verify", default=None, metavar="HANDOVER_MD")
@@ -1145,7 +1178,7 @@ def main(argv=None):
           "fold": cmd_fold, "split": cmd_split, "set-status": cmd_set_status, "add-edge": cmd_add_edge, "set-current": cmd_set_current,
           "add-node": cmd_add_node, "lint-prose": cmd_lint_prose, "lint-handover": cmd_lint_handover,
           "add-doc": cmd_add_path, "add-code": cmd_add_path, "backlog": cmd_backlog, "set-next": cmd_set_next,
-          "set-issue": cmd_set_issue, "close": cmd_close, "add": cmd_add, "append": cmd_append, "render": cmd_render}[args.cmd](g, args)
+          "set-issue": cmd_set_issue, "close": cmd_close, "add": cmd_add, "append": cmd_append, "attach": cmd_attach, "render": cmd_render}[args.cmd](g, args)
     except WriteRefused as e:
         print("## write refused — the graph would be invalid; nothing was written (U31)")
         print(table(["severity", "finding"], [("error", p) for p in e.args[0]]))
