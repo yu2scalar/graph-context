@@ -257,8 +257,9 @@ def validate(g, want_schema=True, drift=True):
         if "source_ref" in n and regs:
             if not any(r["type"] == n["type"] and re.match(r["id_pattern"], n["source_ref"]) for r in regs):
                 problems.append(f"{k}.source_ref `{n['source_ref']}` matches no registry of type {n['type']}")
+        view_paths = {v["path"] for v in g.get("config", {}).get("views", [])}  # rendered right after an accepted save
         for p in n.get("docs", []) + n.get("code_targets", []):
-            if not os.path.exists(p):
+            if not os.path.exists(p) and p not in view_paths:
                 problems.append(f"{k}: path missing `{p}`")
         if n["type"] != "component" and roots:
             for c in n.get("code_targets", []):
@@ -460,10 +461,22 @@ def render_view(g, kind):
             out.append(f"| {ref(k)} | {first_line(sec(k).get('Statement')) if sec(k) else ns[k]['name']} | {rel(k)} | {decision_status(ns, k)} | {ns[k].get('file', '(no entity file yet)')} |")
     elif kind == "public-decisions":
         out += ["# Public decision register (generated from each decision's Public summary)", "", "| id | Decision | Supersedes / resolves | Status |", "|----|----------|-----------------------|--------|"]
+        pub_files = [r["file"] for r in g["config"].get("registries", []) if r.get("public_column")]
+        pub_col = {r["file"]: r["public_column"] for r in g["config"].get("registries", []) if r.get("public_column")}
+        rows_ = []
         for k in decs:
             s_ = sec(k)
-            if not s_: continue  # not migrated yet: nothing public to show
-            out.append(f"| {ref(k)} | {first_line(s_.get('Public summary'))} | {rel(k)} | {decision_status(ns, k)} |")
+            if not s_: continue  # no entity file yet: nothing public to show
+            rows_.append((ref(k), f"| {ref(k)} | {first_line(s_.get('Public summary'))} | {rel(k)} | {decision_status(ns, k)} |"))
+            for fid in ns[k].get("folded", []):  # folded ids stay visible publicly, text from the public copy in the Folded section
+                txt = "—"
+                for m in re.finditer(r"^- " + re.escape(fid) + r" `([^`]+):\d+`\n  (.+)$", s_.get("Folded", ""), re.M):
+                    if m.group(1) in pub_files:
+                        cells = split_cells(m.group(2)); c = pub_col[m.group(1)] - 1
+                        if c < len(cells): txt = cells[c]
+                rows_.append((fid, f"| {fid} | {txt} | — | folded into {ref(k)} |"))
+        key = lambda x: (re.sub(r"\d", "", x[0]), int(re.sub(r"\D", "", x[0]) or 0))
+        out += [r for _, r in sorted(rows_, key=key)]
     elif kind == "issues":
         out += ["# Issue register (generated)", "", "| id | issue | status | owner | trigger | closed_by | attached to |", "|---|---|---|---|---|---|---|"]
         iss = sorted((k for k, n in ns.items() if n["type"] == "issue"), key=lambda k: int(re.sub(r"\D", "", ref(k)) or 0))
@@ -1197,9 +1210,60 @@ def migrate_plans(g, args):
     log_op(g, f"migrate --plans: {len(moved)} plan documents moved into plan entities: " + ", ".join(moved), args.graph, b4)
     return cmd_validate(g, args)
 
+def retire_registry(g, args):
+    """A hand-written registry whose rows are already in entity Copies: move its remaining lines that mention an id into
+    entity logs (first mentioned id holds the line, the others get a pointer), repoint config.registries, remove the file."""
+    ns = g["nodes"]; f = args.retire_registry
+    if not os.path.exists(f): print(f"ERROR: {f} not found"); return 1
+    by_ref = {n.get("source_ref"): k for k, n in ns.items() if n.get("source_ref")}
+    lines = open(f, encoding="utf-8").read().splitlines(); moves = []
+    for i, line in enumerate(lines, 1):
+        if line.startswith("|"): continue  # table rows are already verbatim in each entity's Copies (migrate)
+        ids = [x for x in dict.fromkeys(re.findall(r"(?<![\w-])([A-Z]+-?\d+)(?![\w-])", line)) if x in by_ref]
+        if ids: moves.append((i, line, [by_ref[x] for x in ids]))
+    unmatched_rows = [l for l in lines if l.startswith("| ") and re.match(r"^\| ([A-Za-z]+-?\d+) \|", l) and re.match(r"^\| ([A-Za-z]+-?\d+) \|", l).group(1) not in by_ref]
+    print(f"## migrate --retire-registry {f}" + (" --dry-run" if args.dry_run else ""))
+    print(table(["line", "held by", "pointers in", "text"], [(i, t[0], ", ".join(t[1:]) or "—", l[:70]) for i, l, t in moves]))
+    if unmatched_rows: print(f"WARNING: {len(unmatched_rows)} rows with ids that have no node — not retired"); return 1
+    views = {v["kind"]: v["path"] for v in g["config"].get("views", [])}
+    for r in g["config"].get("registries", []):
+        if r["file"] == f and ("issues" if r["type"] == "issue" else "decisions") not in views:
+            print(f"ERROR: no `{'issues' if r['type'] == 'issue' else 'decisions'}` view in config.views to take over `{f}` — add one first"); return 1
+    if args.dry_run: return 0
+    touched = sorted({ns[k]["file"] for _, _, t in moves for k in t})
+    backup = {fp: open(fp, encoding="utf-8").read() for fp in touched}
+    backup_graph = json.loads(json.dumps(g))
+    for i, line, targets in moves:
+        holder = targets[0]
+        for k in targets:
+            fp = ns[k]["file"]
+            if sha256_of(fp) != ns[k]["sha256"]: print(f"ERROR: {fp} changed outside graph_tool"); return 1
+            txt = open(fp, encoding="utf-8").read().rstrip("\n")
+            txt += (f"\n- moved from `{f}:{i}` (retired registry): {line.lstrip('- ').strip()}\n" if k == holder else f"\n- see the log of `{holder}` for `{f}:{i}` (retired registry, note about this entity too)\n")
+            open(fp, "w", encoding="utf-8").write(txt); ns[k]["sha256"] = sha256_of(fp)
+    new_home = None
+    for r in g["config"].get("registries", []):
+        if r["file"] == f:
+            new_home = views.get("issues" if r["type"] == "issue" else "decisions", r["file"]); r["file"] = new_home
+    for n in ns.values():  # nodes that listed the retired file now point at the generated view
+        if f in n.get("docs", []):
+            n["docs"] = list(dict.fromkeys(new_home if x == f else x for x in n["docs"])) if new_home else [x for x in n["docs"] if x != f]
+    registry_text = open(f, encoding="utf-8").read(); os.rename(f, f + ".retiring")
+    b4 = md5(args.graph)
+    try:
+        guarded_save(args.graph, g)
+    except WriteRefused:  # P2: a refused write changes nothing — restore every touched file and the registry
+        for fp, t in backup.items(): open(fp, "w", encoding="utf-8").write(t)
+        os.rename(f + ".retiring", f); g.clear(); g.update(backup_graph)
+        raise
+    os.remove(f + ".retiring")
+    log_op(g, f"migrate --retire-registry {f}: {len(moves)} lines moved into entity logs; registries repointed to generated views; file removed", args.graph, b4)
+    return cmd_validate(g, args)
+
 def cmd_migrate(g, args):
     """Give every node without an entity file its file, mechanically and reproducibly (no judgment, no paraphrase)."""
     if getattr(args, "plans", False): return migrate_plans(g, args)
+    if getattr(args, "retire_registry", None): return retire_registry(g, args)
     ns = g["nodes"]; rows = scan_rows(g); todo = sorted(k for k, n in ns.items() if not n.get("file"))
     report, written = [], []
     for k in todo:
@@ -1347,7 +1411,7 @@ def main(argv=None):
     p = sp("append", "node", "text")
     p = sp("attach", "node"); p.add_argument("--section", action="append"); p.add_argument("--as-plan", dest="as_plan", action="store_true")
     p = sp("render"); p.add_argument("--check", action="store_true")
-    p = sp("migrate"); p.add_argument("--dry-run", dest="dry_run", action="store_true"); p.add_argument("--plans", action="store_true")
+    p = sp("migrate"); p.add_argument("--dry-run", dest="dry_run", action="store_true"); p.add_argument("--plans", action="store_true"); p.add_argument("--retire-registry", dest="retire_registry", metavar="FILE")
     p = sp("rename", "node", "name")
     for name, a in ap._subparsers._group_actions[0].choices.items():
         if name == "handover-tables": a.add_argument("--verify", default=None, metavar="HANDOVER_MD")

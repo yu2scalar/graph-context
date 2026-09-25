@@ -165,6 +165,17 @@ def main():
         rc, out = _run(gt.cmd_rename, q(node="core", name="Core v2")); g14 = gt.load(p)
         assert rc == 0 and g14["nodes"]["core"]["name"] == "Core v2" and gt.entity_title(g14["nodes"]["core"]["file"]) == "Core v2", out
         g14["nodes"]["core"]["name"] = "stale"; probs, _ = gt.validate(g14, want_schema=False); assert any("name differs from the heading" in x for x in probs)
+        # retire-registry: lines moved into entity logs; a refused write restores everything
+        open("docs/reg.md", "w").write("# reg\n| TBD-01 | q | open |\n- 2026-09-25 TBD-01: note about it\n")
+        g15 = gt.load(p); g15["config"]["registries"].append({"type": "issue", "id_pattern": "^TBD-\\d{2}$", "file": "docs/reg.md"}); g15["nodes"]["tbd-01"]["docs"].append("docs/reg.md"); g15["config"]["views"].append({"kind": "issues", "path": "docs/views/issues.md"}); gt.save(p, g15)
+        before_e = open(g15["nodes"]["tbd-01"]["file"]).read()
+        g16 = gt.load(p); g16["nodes"]["core"]["part_of"] = ["f"]; gt.save(p, g16)  # make the graph invalid -> the retire write must be refused
+        rc, out = _run(gt.cmd_migrate, q(dry_run=False, plans=False, retire_registry="docs/reg.md"))
+        assert rc == 1 and os.path.exists("docs/reg.md") and open(gt.load(p)["nodes"]["tbd-01"]["file"]).read() == before_e, "refused retire must restore everything"
+        g17 = gt.load(p); g17["nodes"]["core"].pop("part_of"); gt.save(p, g17)
+        rc, out = _run(gt.cmd_migrate, q(dry_run=False, plans=False, retire_registry="docs/reg.md"))
+        g18 = gt.load(p)
+        assert rc == 0 and not os.path.exists("docs/reg.md") and "note about it" in open(g18["nodes"]["tbd-01"]["file"]).read() and "docs/reg.md" not in g18["nodes"]["tbd-01"]["docs"], out
         print("test_graph_tool: all assertions hold")
     except AssertionError as e:
         ok = False; print("FAIL:", e)
