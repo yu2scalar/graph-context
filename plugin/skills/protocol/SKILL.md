@@ -42,7 +42,7 @@ component, feature or function. `task` exists for manual use and is never genera
 **Node fields**: required `id`, `type`, `name`, `docs[]`, `code_targets[]`. Optional edges:
 `part_of` (≤1, child → parent), `depends_on`, `affects`, `resolves` (decision → issue only),
 `supersedes` (decision → decision only). Optional `source_ref` (registry id, decision/issue only,
-single-valued), `folded[]` (registry ids absorbed by compaction, decision only), `wip_status`
+single-valued), `wip_status`
 (`PLANNED` | `IN_PROGRESS` | `BLOCKED` | `DONE`; not on issues), `next` (bool, the item to take up next;
 not on component/decision). Issue nodes require `issue_status` (`open` | `resolved` | `transferred`) and may
 carry `owner` (`user` | `claude`) and `trigger`; `closed_by` is required when not open (D33). Types `plan` and `rule`
@@ -191,8 +191,8 @@ Run when `config` is incomplete or `--reconfigure` is given.
 2. Persist answers to `config` and create the component nodes.
 
 ### Step 1 — load and preserve
-If the graph exists, validate it (R1). Preserve `current_node`, `wip_status`, `part_of`, `folded`, `config`
-unless `--reset-structure` (which discards `part_of` and `folded` and re-proposes splits/folds under the
+If the graph exists, validate it (R1). Preserve `current_node`, `wip_status`, `part_of`, `config`
+unless `--reset-structure` (which discards `part_of` and re-proposes splits/folds under the
 current `growth_threshold`). Never drop a node because a scan did not rediscover it; report it instead.
 
 ### Step 2 — derive structure from design docs (R5)
@@ -258,8 +258,7 @@ Purpose: load the full 1-hop / 2-hop neighbourhood and produce the Impact Assess
      comparison against related code (reported as "parent-code layer"), not a content check:
      (a) *Registry ↔ graph*: for every `config.registries[]` entry, scan its file for ids matching `id_pattern`.
          Ids present in the file and referenced from a document in `docs_scope` but with no node → "unindexed";
-         nodes whose `source_ref` is absent from the file → "orphan source_ref"; a node whose `folded[]` id is
-         absent from the file → "folded id lost".
+         nodes whose `source_ref` is absent from the file → "orphan source_ref".
      (b) *Docs-only structural nodes* (feature / function with empty `code_targets`): compared against the newest
          change in the `code_targets` of its non-component `part_of` parent and of every node it `affects`; if that
          code is newer than the node's `docs`, flag "docs-only node behind related code" naming the source node.
@@ -291,7 +290,8 @@ Filter line + excluded counts per component; WARNING when nothing carries `next`
 |------|------|------|--------------------------|
 
 ### Constraints inherited from decisions
-- <one bullet per decision in hops 0–2: source_ref, what it fixes verbatim, folded ids if any>
+- <one bullet per visible decision in hops 0–2: source_ref and its Statement; folded decisions and resolved issues are hidden and
+  counted ("History hidden …"); `hydrate --history` shows them>
 
 ### Decisions to re-examine
 For each decision D in hops 0–1: affects(D) ∪ resolves(D) ∪ decisions that supersede / are superseded by D
@@ -352,11 +352,11 @@ Purpose: persist the exact state of work so a fresh session resumes with zero re
    only part of the node's `code_targets`, or (c) its design document gained ≥ 2 top-level sections describing separate
    behaviours — (b) and (c) are judged by hand and, when proposed, marked `(manual)`. On approval: create `function` children with `part_of` the node, move the relevant `docs`,
    `code_targets` and decision/issue attachments to them, leave the parent with overview docs only.
-3. **Fold check (F7 = C)**: candidates are (i) a decision that is a `supersedes` target and has no other live
-   in-edges, (ii) an issue that is a `resolves` target and has no other live in-edges. Never fold a node with
-   `wip_status` IN_PROGRESS or BLOCKED. On approval: survivor.`folded` += folded `source_ref`s;
-   survivor.`affects` ∪= folded.`affects`; survivor.`docs` ∪= folded.`docs`; delete the folded node and edges
-   to it. Text stays in the registry, so nothing is lost overall.
+3. **Fold check (D31, D37)**: a candidate is a decision that is a `supersedes` target, has no other live in-edges and
+   is not IN_PROGRESS / BLOCKED / FOLDED. On approval, `graph_tool.py fold <victim> <survivor>` **hides** it: the victim
+   keeps its node and entity file, gets `wip_status: FOLDED`, the survivor `supersedes` it and inherits its `affects`.
+   Folded decisions are hidden from hydrate by default (history count; `--history` shows them). Resolved issues need no
+   fold — they are hidden by `issue_status: resolved`; transferred issues stay visible. Nothing is deleted.
 4. **Staleness (F10 + D24)** as in hydrate step 5 (both layers), over the touched nodes.
 5. **Write the handover** to `config.handover_path` (create the directory if needed; overwrite; the graph is
    the durable history, the handover is the live pointer) using the template below.

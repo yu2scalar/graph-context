@@ -83,8 +83,8 @@ structure. Root holds only `current_node`, `nodes`, `config`.
 says how such ids are recognised and which file holds their text.
 
 **Growth and compaction**: a feature starts as one node and is split into `function` children when attached
-decisions and issues reach `config.growth_threshold`; superseded decisions and resolved issues are folded into
-the surviving decision (`folded`). Both are proposals that need your approval.
+decisions and issues reach `config.growth_threshold`; a superseded decision can be folded into the surviving one — it
+stays as a hidden history node (`FOLDED`), shown with `hydrate --history`. Both are proposals that need your approval.
 
 Full data model and the public decision register: `plugin/skills/protocol/references/`.
 

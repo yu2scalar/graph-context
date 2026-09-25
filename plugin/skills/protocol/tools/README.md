@@ -11,7 +11,9 @@
 | `hydrate <node_id>` | `current_node` | full Impact Assessment Checklist for the node (hops 0–2 over all edge kinds, both directions) |
 | `check` | no | growth candidates, fold candidates, staleness (timestamp + D24 content layer), proposals (`--lang ja`) |
 | `handover-tables` | no | Markdown for handover §2, §6 lines, §7 table — paste verbatim (D25) |
-| `fold <victim> <survivor>` | yes | fold a superseded decision / resolved issue into the survivor, then validate |
+| `fold <victim> <survivor>` | yes | fold a superseded decision into the survivor: the victim is kept as a hidden history node (`wip_status: FOLDED`, survivor `supersedes` it); resolved issues need no fold (hidden by status) |
+| `hydrate --history <node>` | current_node | hydrate including hidden history (folded decisions, resolved issues) |
+| `migrate --restore-folds` | yes | legacy graphs: bring back every node an old delete-fold removed, from the survivor's Folded copies, as hidden history; drop `folded[]` |
 | `split <node> <child>=<id,id> …` | yes | create `function` children under a feature and move attachments, then validate |
 | `set-status <node> <PLANNED\|IN_PROGRESS\|BLOCKED\|DONE\|none>` | yes | change `wip_status` (not on issues), then validate |
 | `add <id> <decision\|issue\|plan\|rule> "<name>" --section 'Heading=text' … (--new-not-duplicate "<why>" \| --duplicate-of <id>)` | yes | search before add (P4): lists every existing entity of that type + similarity top 5; writes nothing until the outcome is stated; then creates `docs/entities/<id>.md` (fixed headings, Log last) and the node (`file`, `sha256`) together |

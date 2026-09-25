@@ -36,7 +36,6 @@ Deliberately absent: `code_roots` (derived: union of component nodes' `code_targ
 | `resolves` | no | nodeId[] | decision → issue only |
 | `supersedes` | no | nodeId[] | decision → decision only |
 | `source_ref` | no | string | registry id verbatim (`D-022`, `TBD-24`); decision/issue only; single-valued |
-| `folded` | no | string[] | registry ids absorbed by compaction; decision only |
 | `wip_status` | no | enum | `PLANNED` \| `IN_PROGRESS` \| `BLOCKED` \| `DONE` \| `FOLDED`; `PLANNED` = not-yet-started plan step (D33, D34 R-b); on decisions the implementation state, `FOLDED` = absorbed by the superseding decision, hidden history (D31, D37; set only by `fold`); never on issue nodes |
 | `next` | no | bool | the item to take up next (D33); feature/function/task/issue only |
 | `issue_status` | issue: yes | enum | `open` \| `resolved` \| `transferred`; issue only |
@@ -49,8 +48,9 @@ Deliberately absent: `code_roots` (derived: union of component nodes' `code_targ
 ## Hierarchy and growth
 Root → component → feature → function. A feature starts as one node; when attached decisions+issues reach
 `growth_threshold`, or a decision applies to only part of it, handover proposes splitting into `function`
-children and the parent becomes an index node. Superseded decisions and resolved issues are folded into the
-surviving decision (`folded[]`) on approval; text stays in the registry.
+children and the parent becomes an index node. A superseded decision is folded into the surviving
+decision on approval: it stays as a node with `wip_status: FOLDED`, linked by the survivor's `supersedes`, hidden by default
+(D31, D37). Resolved issues are hidden by their `issue_status`. Nothing is deleted.
 
 ## Invariants enforced by the skill (R1), not expressible in JSON Schema
 key == id · every edge target exists · no self-edges · `part_of` acyclic · `resolves` decision→issue (target `issue_status: resolved`) ·

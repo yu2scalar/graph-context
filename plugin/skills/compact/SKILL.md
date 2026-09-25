@@ -1,6 +1,6 @@
 ---
 name: compact
-description: Run the fold check over the whole dependency_graph.json and propose folding superseded decisions / resolved issues into their surviving decision. Part of the `graph` plugin.
+description: Run the fold check over the whole dependency_graph.json and propose folding superseded decisions into their surviving decision (fold hides — the folded decision stays as a history node). Part of the `graph` plugin.
 ---
 
 # /graph:compact
