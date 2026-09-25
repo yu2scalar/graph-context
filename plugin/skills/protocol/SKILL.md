@@ -5,7 +5,7 @@ description: Graph-based project context management (protocol skill of the `grap
 
 # graph-context
 
-> Status: **v3.3.0-dev.1 (2026-09-25 — D33 Backlog view, issue_status / PLANNED / next, backlog/set-next/set-issue/close; v3.2.0 2026-09-24 — D26 protocol as code: `tools/graph_tool.py` executes R1, hydrate, check, handover tables, fold, split; rule R9; v3.1.1 = D24/D25; v3.1.0 = plugin `graph`; v3.0.0 = plugin packaging)**
+> Status: **v3.3.0-dev.2 (2026-09-25 — D36 integrity-first store: entity files, add / append / attach / migrate / render; dev.1: D33 Backlog view, issue_status / PLANNED / next, backlog/set-next/set-issue/close; v3.2.0 2026-09-24 — D26 protocol as code: `tools/graph_tool.py` executes R1, hydrate, check, handover tables, fold, split; rule R9; v3.1.1 = D24/D25; v3.1.0 = plugin `graph`; v3.0.0 = plugin packaging)**
 > Long-form material (full data model, public decision register D1–D36) lives in `${CLAUDE_SKILL_DIR}/references/`.
 
 ## Purpose
@@ -77,6 +77,23 @@ and the fields `file` + `sha256` (entity text file, written by graph_tool only) 
 
 Not in config, by decision: `code_roots` (derived: union of component nodes' `code_targets`),
 `project_name`, `version` (git / CLAUDE.md own them).
+
+## Integrity-first store (3.3.0-dev, D36)
+
+Every node's text lives in exactly one entity file, `docs/entities/<id>.md`; status and edges live only in
+`dependency_graph.json`; the node `name` is a copy of the file's heading. Documents people read (`config.views`:
+registers, `current.md`, plans, the public register) are generated. Therefore:
+- **Never edit `docs/entities/*` or a view by hand.** `validate` detects it (sha256, drift) and refuses further writes.
+- **New fact → `graph_tool.py add <id> <type> "<name>" --section 'Heading=text' …`.** It first lists every existing entity of
+  that type; read the list, then state `--new-not-duplicate "<why>"` or `--duplicate-of <id>` (then `append`). Duplicates
+  written in other words are only caught by that reading.
+- **Correction or later note → `graph_tool.py append <id> "<text>"`** (entity files are append-only); name change → `rename`.
+- **Existing records → `migrate`** (reproducible: registry rows copied verbatim, first matching registry = primary),
+  `migrate --plans` (plan documents into plan entities), `migrate --retire-registry <file>` (hand-written register into
+  entity logs, then removed).
+- Every write is validated before it is saved; a refused write changes nothing.
+- Claude memory holds preferences and pointers only, never project facts (P5).
+- Hydrate lists each subgraph node's entity file first — read those before anything else.
 
 ## Command recognition
 

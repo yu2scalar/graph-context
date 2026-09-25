@@ -5,7 +5,7 @@ description: Update dependency_graph.json (current_node, wip_status, edges), pro
 
 # /graph:handover
 
-> Status: v3.3.0-dev.1 (2026-09-25 — D33 Backlog view, issue_status / PLANNED / next, backlog/set-next/set-issue/close; v3.2.0 2026-09-24 — protocol as code: the protocol section you execute now starts by running `${CLAUDE_PLUGIN_ROOT}/skills/protocol/tools/graph_tool.py` (D26); v3.1.1 = D24/D25; v3.1.0 = plugin `graph`)
+> Status: v3.3.0-dev.2 (2026-09-25 — D36 integrity-first store: entity files, add / append / attach / migrate / render; dev.1: D33 Backlog view, issue_status / PLANNED / next, backlog/set-next/set-issue/close; v3.2.0 2026-09-24 — protocol as code: the protocol section you execute now starts by running `${CLAUDE_PLUGIN_ROOT}/skills/protocol/tools/graph_tool.py` (D26); v3.1.1 = D24/D25; v3.1.0 = plugin `graph`)
 
 Thin delegating command. Do not improvise its behaviour here.
 

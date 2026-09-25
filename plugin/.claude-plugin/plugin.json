@@ -1,6 +1,6 @@
 {
   "name": "graph",
-  "version": "3.3.0-dev.1",
+  "version": "3.3.0-dev.2",
   "description": "Graph-based project context management. Keeps dependency_graph.json as a schema-validated index over a project's components, design documents and decision/issue registries (never a copy of their content). Forces the relevant 1-hop/2-hop neighbourhood to be hydrated before any code change, tracks decision drift and stale docs, proposes node growth (split) and compaction (fold), and writes lossless WIP handovers. Commands: /graph:install, /graph:uninstall, /graph:init, /graph:hydrate <node_id>, /graph:handover, /graph:compact; protocol skill /graph:protocol. Bounded, reversible footprint in the target project: dependency_graph.json, the handover file, and one marked block each in CLAUDE.md and .gitignore.",
   "author": {
     "name": "Yuji Ochiai",

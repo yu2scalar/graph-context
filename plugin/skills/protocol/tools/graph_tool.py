@@ -618,11 +618,15 @@ def cmd_hydrate(g, args):
     print("### Subgraph"); print(subgraph_table(ns, hop)); print(SUBGRAPH_LEGEND); print()
     rows = []
     for k in sorted(hop, key=lambda x: (hop[x][0], x)):
+        if ns[k].get("file"):  # P1: the node's own text — read it first
+            f = ns[k]["file"]
+            st = "MISSING" if not os.path.exists(f) else ("exists" if sha256_of(f) == ns[k].get("sha256") else "exists — CHANGED OUTSIDE graph_tool")
+            rows.append((k, "entity (the node's text)", f"`{f}`", st))
         for kind in ("docs", "code_targets"):
             for p in ns[k].get(kind, []):
                 st = "MISSING" if not os.path.exists(p) else ("exists (dir: read every file under it)" if os.path.isdir(p) else "exists")
                 rows.append((k, kind, f"`{p}`", st))
-        if "source_ref" in ns[k]:
+        if "source_ref" in ns[k] and not ns[k].get("file"):  # with an entity file the registry rows are already in its Copies
             regs = [r for r in g["config"].get("registries", []) if r["type"] == ns[k]["type"] and re.match(r["id_pattern"], ns[k]["source_ref"])]
             for r in regs:
                 rows.append((k, "registry entry", f"`{ns[k]['source_ref']}` in `{r['file']}`", "exists" if os.path.exists(r["file"]) else "MISSING"))
@@ -630,7 +634,9 @@ def cmd_hydrate(g, args):
     print("### Constraints inherited from decisions")
     dec = [k for k in hop if ns[k]["type"] == "decision"]
     for k in sorted(dec, key=lambda x: (hop[x][0], x)):
-        n = ns[k]; print(f"- hop {hop[k][0]} `{k}` ({n.get('source_ref', '—')}): {n['name']}" + (f" — folded: {', '.join(n['folded'])}" if n.get("folded") else ""))
+        n = ns[k]; st_ = entity_sections(n["file"]).get("Statement", "") if n.get("file") and os.path.exists(n["file"]) else ""
+        st_ = re.sub(r"\s+", " ", st_)[:220] if st_ and not st_.startswith(NOT_RECORDED) else n["name"]
+        print(f"- hop {hop[k][0]} `{k}` ({n.get('source_ref', '—')}): {st_}" + (f" — folded: {', '.join(n['folded'])}" if n.get("folded") else ""))
     if not dec: print("- none")
     print()
     print("### Decisions to re-examine (hop 0–1 decisions: affects ∪ resolves ∪ supersedes ∪ superseded-by ∪ same-parent decisions)")
