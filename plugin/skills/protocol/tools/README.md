@@ -1,6 +1,6 @@
 # tools/
 
-> Status: v3.3.0-dev.8 (2026-09-28) — the pointer is the handover: entity files, generated views, issues as nodes, completion gate, fold hides. What changed and why: the decision register `references/40-decision-register.md` (protocol skill).
+> Status: v3.3.0-dev.9 (2026-09-28) — the pointer is the handover: entity files, generated views, issues as nodes, completion gate, fold hides. What changed and why: the decision register `references/40-decision-register.md` (protocol skill).
 
 `graph_tool.py` is the executable part of the protocol (D26). Run it from the project root that holds
 `dependency_graph.json`; it resolves the schema relative to its own location.
@@ -19,7 +19,7 @@
 | `migrate --drop-handover-path [--dry-run]` | yes | D30: remove the retired `config.handover_path`; move `graph_tool.log` to `.context/graph_tool.log` when it lived elsewhere; the old handover file is reported, never deleted |
 | `split <node> <child>=<id,id> …` | yes | create `function` children under a feature and move attachments, then validate |
 | `set-status <node> <PLANNED\|IN_PROGRESS\|BLOCKED\|DONE\|none>` | yes | change `wip_status` (not on issues), then validate |
-| `add <id> <decision\|issue\|plan\|rule> "<name>" --section 'Heading=text' … (--new-not-duplicate "<why>" \| --duplicate-of <id>)` | yes | search before add (P4): lists every existing entity of that type + similarity top 5; writes nothing until the outcome is stated; then creates `docs/entities/<id>.md` (fixed headings, Log last) and the node (`file`, `sha256`) together |
+| `add <id> <decision\|issue\|plan\|rule> "<name>" [--part-of P] [--owner O --trigger T] --section 'Heading=text' … (--new-not-duplicate "<why>" \| --duplicate-of <id>)` | yes | search before add (P4): lists every existing entity of that type + similarity top 5; writes nothing until the outcome is stated; then creates `docs/entities/<id>.md` (fixed headings, Log last) and the node (`file`, `sha256`) together |
 | `append <id> "<text>"` | yes | entity files are append-only: adds a dated line under `## Log`; refuses when the file was edited outside the tool |
 | `migrate [--dry-run]` | yes | gives every node without an entity file its file, mechanically (reproducible: same input → same files): decision / issue text = the row of the first matching registry in `config.registries` order, every other copy (table rows and `- <ID> ` list items in registries + `docs_scope`) verbatim with file:line, folded ids' copies, 「…」 quotes collected, `Public summary` from the registry with `public_column`; missing sections say "(not recorded in the source)"; ids whose copies differ are listed for review |
 | `attach <id> --section … [--as-plan]` | yes | give one existing node its entity file from given sections (`--as-plan` turns a feature / function into a plan) |

@@ -12,7 +12,7 @@ content): components, design-document structure, decisions, issues, and the rela
 the relevant 1-hop / 2-hop neighbourhood to be loaded before any code change and gates every pause so that
 `current_node` alone is the handover.
 
-Current version: **3.3.0-dev.8** (development pre-release; last release 3.2.0). Plugin name `graph`, marketplace `graph-context` (this repository).
+Current version: **3.3.0-dev.9** (development pre-release; last release 3.2.0). Plugin name `graph`, marketplace `graph-context` (this repository).
 
 ## Commands
 
@@ -48,8 +48,11 @@ project-scope install does not count). Then, in the project: `/graph:install` fo
 
 ```bash
 /plugin marketplace update graph-context   # fetch the latest from GitHub
-/reload-plugins                                  # apply it to the session
+/reload-plugins                            # apply it to the session
 ```
+
+Each project-scope install is updated separately: run the two commands in a session started in **each** project that
+uses the plugin (the update in one project does not move another project's install).
 
 ## Uninstall
 

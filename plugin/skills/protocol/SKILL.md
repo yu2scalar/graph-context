@@ -5,7 +5,7 @@ description: Graph-based project context management (protocol skill of the `grap
 
 # graph-context
 
-> Status: **v3.3.0-dev.8** (2026-09-28) — the pointer is the handover: entity files, generated views, issues as nodes, completion gate, fold hides. What changed and why: the decision register `references/40-decision-register.md`.
+> Status: **v3.3.0-dev.9** (2026-09-28) — the pointer is the handover: entity files, generated views, issues as nodes, completion gate, fold hides. What changed and why: the decision register `references/40-decision-register.md`.
 > Long-form material (full data model, public decision register D1–D37) lives in `${CLAUDE_PLUGIN_ROOT}/skills/protocol/references/`.
 
 ## Purpose
@@ -131,8 +131,10 @@ Purpose: put the skill into a host project with a bounded, reversible footprint 
 
 The plugin must be installed for this project first (README: `/plugin install graph@graph-context`, project scope, in
 the project's folder); `${CLAUDE_PLUGIN_ROOT}` is expanded only when the command runs as a skill of the loaded plugin.
-All paths below use `${CLAUDE_PLUGIN_ROOT}/skills/protocol/…` because every `/graph:<cmd>` runs as its own delegate
-skill, whose `${CLAUDE_SKILL_DIR}` is the delegate's folder, not this one. Nothing is copied into the project except the footprint below.
+All paths in this file are written `${CLAUDE_PLUGIN_ROOT}/skills/protocol/…`: every `/graph:<cmd>` runs as its own
+delegate skill (whose `${CLAUDE_SKILL_DIR}` is the delegate's folder, not this one), and this file is opened with Read,
+where no variable is expanded. Replace `${CLAUDE_PLUGIN_ROOT}/skills/protocol` by the protocol folder the delegate named
+in its step 0 (this file's own folder). Nothing is copied into the project except the footprint below.
 
 1. Run `python3 ${CLAUDE_PLUGIN_ROOT}/skills/protocol/tools/graph_tool.py install --dry-run` from the project root. It prints the
    footprint: `dependency_graph.json` (created from the template if absent), the marked block appended to `CLAUDE.md`
@@ -220,7 +222,8 @@ current `growth_threshold`). Never drop a node because a scan did not rediscover
 
 ### Step 2 — derive structure from design docs (R5)
 For each document in `docs_scope` (each node is created with
-`add-node <id> feature|function "<name>" --part-of <parent> --doc <path> --code <path> … --summary "<one line>"`):
+`add-node <id> feature|function "<name>" --part-of <parent> --doc <path> --code <path> … --summary "<one line>"`; the
+name is the document's first heading, the id its kebab-case form):
 - One `feature` node per design document — registry files (`config.registries[].file`) are not features, and neither are
   plan documents a project keeps under its own rules — `part_of` the component whose `code_targets` its referenced
   code falls under (ask if ambiguous; an index/overview document becomes `docs` of the component instead
@@ -236,7 +239,8 @@ Scan the documents in scope and the registry files for ids matching `config.regi
 Create a `decision` / `issue` node **only** when the id is referenced from a document in scope other than the
 registry files themselves, or from the registry text of another referenced id. The node id is the registry id in lower case (`D-001` → `d-001`,
 `TBD-01` → `tbd-01`); commands accept either form, and `closed_by` stores the registry id. Create each with
-`add-node <id> decision|issue "<name>" --part-of <node> --source-ref <ID> --doc <registry file>`: the entity file
+`add-node <id> decision|issue "<name>" --part-of <node> --source-ref <ID> --doc <registry file>` (name = the registry's
+decision / question text, shortened to one line): the entity file
 gets the registry row verbatim (Statement / Text, Primary source / Source, Copies, quoted 「…」 words), the same way
 `migrate` fills it; a ref without a registry row is refused. `part_of` = the feature/function/component whose
 document referenced it (component when cross-cutting). A registry that is only a draft list, or a fact that has no
@@ -279,7 +283,8 @@ Purpose: load the full 1-hop / 2-hop neighbourhood and produce the Impact Assess
    (`--dry-run` for a review that must not move `current_node`).
    It prints the whole checklist below (components, subgraph, files, constraints, re-examine set, existing
    capabilities, staleness in both layers, blast radius, unticked checks) and writes `current_node`. Present its
-   output verbatim; then do the human part: read every `exists` file it listed (the tool reports `exists` /
+   output verbatim (the tool's tables stay English; your judgement, questions and proposals follow R4; a
+   `WARNING: no item carries next` is acted on at `/graph:handover` step 1, not here); then do the human part: read every `exists` file it listed (the tool reports `exists` /
    `MISSING`; "read" is your act, not the tool's), judge the re-examine rows, decide whether any "existing
    capabilities" candidate (name / path overlap, computed by the tool) actually covers the task, and tick the boxes.
    Files loaded lists each node's **entity file first** (`entity (the node's text)`): read those before anything
@@ -384,7 +389,7 @@ successor's `/graph:hydrate <current_node>` output is the view. A pause is compl
    function gets a `wip_status` only once work on it is planned (`PLANNED`), started or done; leave it unset otherwise —
    a PLANNED decision `part_of` a feature does not make the feature PLANNED. Work-in-progress state goes onto nodes, never into prose
    elsewhere: what is done and the exact next edit into the node's entity (`append <node>`), anything unresolved as an
-   issue with owner and trigger (`add <id> issue … --owner --trigger`, or `set-issue`).
+   issue attached where it belongs, with owner and trigger (`add <id> issue "<name>" --part-of <node> --owner … --trigger … --section 'Text=…' --section 'Source=…' --new-not-duplicate "<why>"`, or `set-issue` on an existing one).
 2. **Growth check (F2')**: for each feature/function in the subgraph, propose a split when
    (a) attached decision+issue nodes ≥ `config.growth_threshold` — computed by `check`; or (b) a decision's scope covers
    only part of the node's `code_targets`, or (c) its design document gained ≥ 2 top-level sections describing separate
@@ -428,6 +433,6 @@ Growth and fold are proposals in the interaction language; they are never applie
 | **R7 Always-visible top layer** | Hydrate output begins with the table of all `component` nodes, regardless of hop distance. |
 | **R8 No reinvention** | Before proposing any new feature or function, search `nodes` (name, docs, code_targets) across all components and present matches. Never propose a new component autonomously; that is a user decision. Violations are recorded as issue nodes (owner and trigger). |
 | **R9 Numbers come from the tool** | Any id, hop, count, path status, timestamp or candidate list shown in a checklist or proposal must be copied from `graph_tool.py` output, never retyped or recomputed by hand. A pause is complete only when `graph_tool.py gate` prints `RESULT: OK` (D30). If the tool cannot run (no python3), say so and mark every such value `(manual)`. |
-| **R10 Record, then ask** (D34 R-a) | Once a graph exists, a question to the user is asked only after the node it concerns is written (the question itself `append`ed to that node, or a new issue node; a question that concerns no node goes on the component the work is in, or becomes a new issue), and the question cites the node id. The answer is written to the same node before any work continues, with the user's words verbatim. Before the graph exists (`/graph:install`, the first `/graph:init`) the proposal table is the question and the commands run on approval are its record (config, entity files, operations log). |
+| **R10 Record, then ask** (D34 R-a) | Once a graph exists, a question to the user is asked only after the node it concerns is written (the question itself `append`ed to that node, or a new issue node; a question that concerns no node goes on the component the work is in, or becomes a new issue), and the question cites the node id. The answer is written to the same node before any work continues, with the user's words verbatim (the entity text is English; the question as asked and the user's words stay in the language they were written in). Before the graph exists (`/graph:install`, the first `/graph:init`) the proposal table is the question and the commands run on approval are its record (config, entity files, operations log). |
 | **R11 Plans are nodes** (D34 R-b) | A plan is a `plan` entity (`add <id> plan … --section 'Goal=…' --section 'Approval=…'`) attached to what it plans; each not-yet-started step is a `function` node `part_of` the plan with `wip_status: PLANNED`, ordered by `depends_on`; the step in progress carries `next` and is `current_node`. A step is closed with `append` (what was done, commit ids) then `set-status DONE`. Work starts only after the Approval section records the user's approval. A project rule that plans must be written under `docs/` is met by the plan entity in `docs/entities/`; no separate plan file is written. Before a graph exists (`/graph:install`, the first `/graph:init`) such a project rule is followed as it stands; once init has run, plans are plan entities. |
 | **R12 Everything through a command** | Every change to the store (graph, entity files, views, config) is made by a `graph_tool.py` command documented here, so that another session or project gets the same result from the same input. No hand edits, no ad-hoc scripts; when an operation has no command, the command is added first (with a test), then used. |
