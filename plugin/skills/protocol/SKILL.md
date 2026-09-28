@@ -18,42 +18,54 @@ large enough that "just read the code" stops working:
 2. **Forgotten updates**: code changed, the design document or decision that governs it did not.
 
 It does so by keeping an explicit, machine-checkable **index graph** over the project. The graph never
-holds content; it holds references to where the content lives and the relations between them.
+holds document content; it holds references to where the content lives and the relations between them.
+
+A third goal follows from the first two: **the pointer is the handover** (D30). Every fact a later session needs
+(decisions, issues, plans, working rules, the state of work in progress) is a node with its text in one entity
+file, so `current_node` alone is enough to resume: the next session runs `/graph:hydrate <current_node>` and
+reaches everything from there. No handover document is written; `/graph:handover` is a completion gate.
 
 ## Files
 
 | Path | Role |
 |------|------|
-| `dependency_graph.json` (project root) | The graph. Must validate against the schema. |
+| `dependency_graph.json` (project root) | The graph: nodes, edges, status fields, `config`. Must validate against the schema. |
+| `docs/entities/<id>.md` | One entity file per node: the node's text (decisions, issues, plans, rules, summaries of structure nodes). Written by `graph_tool.py` only, append-only (see Store). |
+| every `config.views[].path` | Generated documents people read (decision register, issue register, current specification, plans, public register). Re-rendered on every accepted write; never edited by hand. |
+| `.context/graph_tool.log` | Operations log: one line per accepted write (graph md5 before → after). |
+| `${CLAUDE_SKILL_DIR}/tools/graph_tool.py` | **The executable protocol (D26).** Every write to the store goes through it (R12). Commands by group — read-only: `validate`, `gate`, `check`, `backlog`, `lint-prose`, `hydrate --dry-run`, `config get`, `render --check`; entities: `add`, `append`, `attach`, `rename`, `add-node`; structure and state: `hydrate <node>` (current_node), `set-current`, `set-status`, `set-next`, `set-issue`, `close`, `add-edge`, `remove-edge`, `add-doc`, `add-code`, `fold`, `split`, `config set`, `render`; migration: `migrate [--plans \| --retire-registry F \| --strip-graph-copies \| --restore-folds \| --drop-handover-path]`. Every number, id, hop, path status and timestamp shown to the user comes from this tool (R9). Full reference: `tools/README.md`. |
 | `${CLAUDE_SKILL_DIR}/schema/graph_schema.json` | JSON Schema, draft 2020-12. Authoritative for shapes. Shipped in the plugin, never copied into the project. |
 | `${CLAUDE_SKILL_DIR}/templates/graph_context.template.json` | Minimal valid seed graph. |
 | `${CLAUDE_SKILL_DIR}/references/` | Full data model, public decision register, sync notes. |
-| `${CLAUDE_SKILL_DIR}/tools/graph_tool.py` | **The executable protocol (D26).** Read-only: `validate`, `gate`, `check`, `lint-prose`, `hydrate --dry-run`. Writing: `hydrate <node>` (current_node), `fold`, `split`, `set-status`, `add-edge`, `set-current`, `add-node`, `add-doc`, `add-code`. Every number, id, hop, path status and timestamp shown to the user comes from this tool (R9). Full list: `tools/README.md`. |
 | `${CLAUDE_PLUGIN_ROOT}/skills/{install,uninstall,init,hydrate,handover,compact}/SKILL.md` | Six thin delegating skills → `/graph:<name>` (D16, D21). Each reads this file and executes the matching section. |
-| `.context/graph_tool.log` | Operations log: one line per accepted write (graph md5 before → after). Fixed path since D30 (`config.handover_path` retired; `migrate --drop-handover-path`). |
 
 ## Data model (summary; schema is authoritative)
 
 **Root** is closed: `current_node`, `nodes`, `config` only.
 
 **Hierarchy**: Root → `component` → `feature` → `function`. `decision` and `issue` nodes attach to a
-component, feature or function. `task` exists for manual use and is never generated.
+component, feature or function. A `plan` is attached (`part_of`) to the feature or function it plans; its steps
+are `function` nodes `part_of` the plan (R11). A `rule` is a working rule set by the user. `task` exists for
+manual use and is never generated.
 
 **Node fields**: required `id`, `type`, `name`, `docs[]`, `code_targets[]`. Optional edges:
 `part_of` (≤1, child → parent), `depends_on`, `affects`, `resolves` (decision → issue only),
-`supersedes` (decision → decision only), `refines` (decision → decision only; the target stays in force, never a fold candidate — u46). Optional `source_ref` (registry id, decision/issue only,
-single-valued), `wip_status`
-(`PLANNED` | `IN_PROGRESS` | `BLOCKED` | `DONE`; not on issues), `next` (bool, the item to take up next;
-not on component/decision). Issue nodes require `issue_status` (`open` | `resolved` | `transferred`) and may
-carry `owner` (`user` | `claude`) and `trigger`; `closed_by` is required when not open (D33). Types `plan` and `rule`
-and the fields `file` + `sha256` (entity text file, written by graph_tool only) belong to the integrity-first store
-(private plan integrity-store, in progress).
+`supersedes` (decision → decision it replaces), `refines` (decision → decision it narrows; the target stays in
+force and is never a fold candidate). Optional `source_ref` (registry id, decision/issue only, single-valued),
+`wip_status` (`PLANNED` | `IN_PROGRESS` | `BLOCKED` | `DONE` | `FOLDED`; not on issues), `next` (bool, the item to
+take up next; not on component/decision), `file` + `sha256` (the entity file and its hash as last written by the tool).
+Issue nodes require `issue_status` (`open` | `resolved` | `transferred`) and may carry `owner` (`user` | `claude`) and
+`trigger`; `closed_by` (decision id, commit hash or short action text) is required when not open (D35).
+On a decision, `wip_status` is its implementation state: `PLANNED` = decided, not yet implemented; `IN_PROGRESS`;
+`DONE` = implemented (or nothing to implement); `FOLDED` = absorbed by the decision that supersedes it (D31, D37).
 
 **Edge direction conventions**
 
 | Relation | Edge |
 |----------|------|
 | feature belongs to component / function belongs to feature | child `part_of` parent |
+| plan belongs to what it plans / plan step belongs to its plan | child `part_of` parent |
+| plan step comes after another step | later step `depends_on` earlier step |
 | feature needs another feature | `depends_on` |
 | feature/function expects something from another component | `depends_on` → that component's function/feature node |
 | issue impacts a feature/function/component | issue `affects` target |
@@ -70,7 +82,8 @@ and the fields `file` + `sha256` (entity text file, written by graph_tool only) 
 | `interaction_language` | inferred | language for every question, recommendation, approval, checklist shown to the user |
 | `design_root` | detected | directory whose document structure the feature/function layer mirrors |
 | `docs_scope` | `<design_root>/**/*.md` | globs `/graph:init` reads |
-| `registries[]` | `[]` | `{type, id_pattern, file}`: how decision/issue ids are recognised and where their text lives |
+| `registries[]` | `[]` | `{type, id_pattern, file}`: how decision/issue ids are recognised in existing registers (the source `migrate` copies from) |
+| `views[]` | absent | `{kind, path}` per generated document; kinds `decisions`, `issues`, `current`, `plans`, `public-decisions` |
 | `growth_threshold` | 5 | attached decision+issue count at which a split is proposed |
 | `backlog_filter` | absent | default filter for the open issues the Backlog lists (`owner`, `next_only`, `component`); hidden ones are counted (D33) |
 | `install` | set by install | sha256 snapshots for uninstall verification |
@@ -78,27 +91,27 @@ and the fields `file` + `sha256` (entity text file, written by graph_tool only) 
 Not in config, by decision: `code_roots` (derived: union of component nodes' `code_targets`),
 `project_name`, `version` (git / CLAUDE.md own them).
 
-## Integrity-first store (3.3.0-dev, D36)
+## Store (D36)
 
-Every node's text lives in exactly one entity file, `docs/entities/<id>.md`; status and edges live only in
-`dependency_graph.json`; the node `name` is a copy of the file's heading. Documents people read (`config.views`:
-registers, `current.md`, plans, the public register) are generated. Therefore:
-- **Never edit `docs/entities/*` or a view by hand.** `validate` detects it (sha256, drift) and refuses further writes.
-- **New fact → `graph_tool.py add <id> <type> "<name>" --section 'Heading=text' …`.** It first lists every existing entity of
-  that type; read the list, then state `--new-not-duplicate "<why>"` or `--duplicate-of <id>` (then `append`). Duplicates
-  written in other words are only caught by that reading.
-- **Correction or later note → `graph_tool.py append <id> "<text>"`** (entity files are append-only); name change → `rename`.
-- **Newer version of a section → `append <id> "<text>" --section <Heading>`.** When a heading appears more than once in an
-  entity file, the **last** section with that heading is the current one (hydrate and views read it that way).
-- **Decision `wip_status` = implementation state**: PLANNED = decided, not yet implemented; IN_PROGRESS; DONE = implemented.
-- **Existing records → `migrate`** (reproducible: registry rows copied verbatim, first matching registry = primary),
-  `migrate --plans` (plan documents into plan entities), `migrate --retire-registry <file>` (hand-written register into
-  entity logs, then removed).
-- Every write is validated before it is saved; a refused write changes nothing.
-- **Everything through a command (rule r2):** config edits with `config set <key> <json>`; structure nodes with `add-node … --summary`
-  (it writes the entity file too). If an operation has no command, add the command (with a test) first — no ad-hoc scripts.
-- Claude memory holds preferences and pointers only, never project facts (P5).
-- Hydrate lists each subgraph node's entity file first — read those before anything else.
+- **One place per fact (P1).** A node's text lives only in its entity file `docs/entities/<id>.md`; its status and
+  edges live only in `dependency_graph.json`; the node `name` is a copy of the file's heading. Required sections:
+  decision — Statement, Public summary, User's words, Reason, Date; issue — Text, Source; plan — Goal, Approval;
+  rule — Statement, Source; structure nodes — Summary. `Log` is always last.
+- **One writer (P2).** Only `graph_tool.py` writes the graph, entity files and views; every write is validated before
+  it is saved and a refused write changes nothing. The graph keeps each entity file's sha256, so an edit made outside
+  the tool is reported by `validate` and blocks further writes until restored.
+- **Append-only.** Corrections and later notes → `append <id> "<text>"` (a dated line under `## Log`); a newer
+  version of a section → `append <id> "<text>" --section <Heading>`; when a heading appears more than once, the
+  **last** section with that heading is the current one. Name change → `rename`.
+- **Generated documents (P3).** Registers, the current specification, plan views and the public register are
+  rendered from the graph (`config.views`) on every accepted write; `validate` reports drift.
+- **Search before add (P4).** `add <id> <type> "<name>" --section 'Heading=text' …` first lists every existing
+  entity of that type; read the list, then state `--new-not-duplicate "<why>"` or `--duplicate-of <id>` (then
+  `append` to the existing one). Duplicates written in other words are only caught by that reading.
+- **Existing records.** Nodes created from registries get their entity files with `migrate` (reproducible: the
+  registry row copied verbatim, the first matching registry is primary); `migrate --plans` turns plan documents into
+  plan entities; `migrate --retire-registry <file>` moves a hand-written register into entity logs and removes it.
+- **Claude memory** holds preferences and pointers only, never project facts (P5).
 
 ## Command recognition
 
