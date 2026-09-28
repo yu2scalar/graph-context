@@ -12,7 +12,7 @@ content): components, design-document structure, decisions, issues, and the rela
 the relevant 1-hop / 2-hop neighbourhood to be loaded before any code change and gates every pause so that
 `current_node` alone is the handover.
 
-Current version: **3.3.0-dev.5** (development pre-release; last release 3.2.0). Plugin name `graph`, marketplace `graph-context` (this repository).
+Current version: **3.3.0-dev.6** (development pre-release; last release 3.2.0). Plugin name `graph`, marketplace `graph-context` (this repository).
 
 ## Commands
 
