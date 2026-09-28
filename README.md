@@ -9,8 +9,8 @@ governing it did not.
 
 The plugin keeps `dependency_graph.json`, a schema-validated **index** over your project (never a copy of its
 content): components, design-document structure, decisions, issues, and the relations between them. It forces
-the relevant 1-hop / 2-hop neighbourhood to be loaded before any code change and writes lossless handovers when
-work pauses.
+the relevant 1-hop / 2-hop neighbourhood to be loaded before any code change and gates every pause so that
+`current_node` alone is the handover.
 
 Current version: **3.3.0-dev.4** (development pre-release; last release 3.2.0). Plugin name `graph`, marketplace `graph-context` (this repository).
 
@@ -19,14 +19,14 @@ Current version: **3.3.0-dev.4** (development pre-release; last release 3.2.0). 
 | Command | What it does |
 |---------|--------------|
 | `/graph:install` | Seed `dependency_graph.json`, append one marked block each to `CLAUDE.md` and `.gitignore`, snapshot checksums. Nothing else is written to your project. |
-| `/graph:init [--reconfigure] [--reset-structure]` | Analyse the project, recommend and ask for `config` (design root, registries, handover path, language, components), derive the graph from design docs and registries. Idempotent; preserves human decisions unless `--reset-structure`. |
+| `/graph:init [--reconfigure] [--reset-structure]` | Analyse the project, recommend and ask for `config` (design root, registries, language, components), derive the graph from design docs and registries. Idempotent; preserves human decisions unless `--reset-structure`. |
 | `/graph:hydrate <node_id>` | Load the node plus 1-hop / 2-hop neighbours over every edge kind, read every referenced file, and emit the Impact Assessment Checklist: components, subgraph, inherited decision constraints, decisions to re-examine, existing capabilities, stale docs, blast radius. Required before modifying code. |
-| `/graph:handover` | Update the graph, propose splits (growth) and folds (compaction), run the staleness check, write the handover: Active Task Pointer, Components + Subgraph, Hard Decisions Log, Unresolved Edges, Immediate Resume Trigger, Decision Drift, Staleness. |
+| `/graph:handover` | Completion gate (D30): record the state on the graph, propose splits (growth) and folds (compaction), run the staleness check, commit, and finish only when `graph_tool.py gate` passes. No handover document: the next session runs `/graph:hydrate <current_node>`. |
 | `/graph:compact` | Run the fold check on demand. |
 | `/graph:uninstall` | Remove the footprint, strip the marked blocks, verify byte-identical restoration, then tell you how to remove the plugin. |
 
 Questions, recommendations and approvals are asked in your project's language (`config.interaction_language`);
-graph contents and handover files are English.
+graph contents, entity files and views are English.
 
 ## Install
 

@@ -1,6 +1,6 @@
 ---
 name: uninstall
-description: Remove the graph-context footprint from this project (dependency_graph.json, handover file, marked blocks) and verify CLAUDE.md and .gitignore are restored byte-identical; then tells you how to remove the plugin itself. Part of the `graph` plugin.
+description: Remove the graph-context footprint from this project (dependency_graph.json, entity files, generated views, operations log, marked blocks) and verify CLAUDE.md and .gitignore are restored byte-identical; then tells you how to remove the plugin itself. Part of the `graph` plugin.
 disable-model-invocation: true
 ---
 

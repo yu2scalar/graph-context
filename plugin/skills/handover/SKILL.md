@@ -1,6 +1,6 @@
 ---
 name: handover
-description: Update dependency_graph.json (current_node, wip_status, edges), propose splits and folds, run the staleness check, and write the lossless WIP handover at config.handover_path. Use when pausing or ending work. Part of the `graph` plugin.
+description: Completion gate for pausing or ending work (D30): record the state on dependency_graph.json (current_node, wip_status, edges, next, issues with owner + trigger), propose splits and folds, run the staleness check, commit, and finish only when graph_tool.py gate prints RESULT: OK. No handover document is written. Part of the `graph` plugin.
 ---
 
 # /graph:handover

@@ -1,6 +1,6 @@
 ---
 name: protocol
-description: Graph-based project context management (protocol skill of the `graph` plugin, invoked as /graph:protocol). Keeps dependency_graph.json as a schema-validated index over a project's components, design documents and decision/issue registries, forces 1-hop/2-hop hydration before code changes, and writes lossless handovers. Commands are /graph:install, /graph:uninstall, /graph:init, /graph:hydrate <node_id>, /graph:handover, /graph:compact. Also triggers on "dependency graph", "hydrate node", "handover", "WIP handover", "context graph", "graph init", "compact graph".
+description: Graph-based project context management (protocol skill of the `graph` plugin, invoked as /graph:protocol). Keeps dependency_graph.json as a schema-validated index over a project's components, design documents and decision/issue registries, forces 1-hop/2-hop hydration before code changes, and gates every pause so that current_node alone is the handover. Commands are /graph:install, /graph:uninstall, /graph:init, /graph:hydrate <node_id>, /graph:handover, /graph:compact. Also triggers on "dependency graph", "hydrate node", "handover", "WIP handover", "context graph", "graph init", "compact graph".
 ---
 
 # graph-context
@@ -126,7 +126,7 @@ Purpose: put the skill into a host project with a bounded, reversible footprint 
    ## CRITICAL PROTOCOL (graph-context)
    - You must strictly follow the protocol of the `graph` plugin (skill `graph:protocol`, installed via `/plugin`).
    - Before modifying any feature or fixing bugs, verify if `dependency_graph.json` exists. If so, run `/graph:hydrate <node_id>` to load 1-hop/2-hop dependencies first.
-   - When ending a session or pausing work, run `/graph:handover` to generate the handover at `config.handover_path`. Never write lossy, generic summaries.
+   - When ending a session or pausing work, run `/graph:handover`: record the state on the graph through `graph_tool.py` and finish only when `graph_tool.py gate` prints `RESULT: OK`. No handover document is written; the next session starts with `/graph:hydrate <current_node>`.
    - Registry mapping (decision / issue ids → files) = `dependency_graph.json` → `config.registries`.
    <!-- graph-context:end -->
    ```
@@ -136,15 +136,16 @@ Purpose: put the skill into a host project with a bounded, reversible footprint 
    .context/
    # graph-context:end
    ```
-   Omit the `.context/` line if `config.handover_path` will live in a tracked directory; keep the markers.
+   `.context/` holds only the operations log `graph_tool.log`; omit the line if the log should be tracked; keep the markers.
 6. Write `config.install` `{installed_at, skill_version, claude_md_sha256_before, gitignore_sha256_before}`; `skill_version` = `version` in `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json`.
 7. Print the footprint (every path created or modified). Ask, in the interaction language, before writing anything.
 
 ## `/graph:uninstall`
 
-1. Compute the footprint: `dependency_graph.json`, the file at `config.handover_path`, `graph_tool.log` in the same directory
-   (and `.context/` if that is its directory and it is otherwise empty), the marked block in `CLAUDE.md`,
-   the marked block in `.gitignore`.
+1. Compute the footprint: `dependency_graph.json`, the entity files and generated views the tool wrote
+   (`docs/entities/`, every `config.views[].path`), `.context/graph_tool.log` (and `.context/` if it is otherwise empty),
+   the marked block in `CLAUDE.md`, the marked block in `.gitignore`. A leftover `.context/WIP_HANDOVER.md` from a
+   version before D30 is listed too.
 2. Show the list with a per-path action (delete file / strip block / delete empty dir) and whether the path
    is git-tracked. Ask for approval.
 3. On approval: delete files and dirs the skill created; strip exactly the text between and including the
@@ -371,9 +372,9 @@ Growth and fold are proposals in the interaction language; they are never applie
 | **R1 Cross-reference validation** | Executed by `graph_tool.py validate`; the checks are: `nodes[k].id == k` (fix the key, never the id). Every target of `part_of` / `depends_on` / `affects` / `resolves` / `supersedes` / `refines` and `current_node` exists. No self-edges. `part_of` ≤ 1 and acyclic. `resolves` only decision → issue, and its target has `issue_status: resolved`; `supersedes` and `refines` only decision → decision. `source_ref` matches some `config.registries[].id_pattern` when registries are defined. Non-component `code_targets` fall under the union of component `code_targets`. Schema-valid (run `python3 -c "import json,jsonschema;jsonschema.Draft202012Validator(json.load(open('${CLAUDE_SKILL_DIR}/schema/graph_schema.json'))).validate(json.load(open('dependency_graph.json')));print('OK')"` when available; otherwise check manually and say so). Schema self-test: `python3 ${CLAUDE_SKILL_DIR}/schema/fixtures/run_fixtures.py` (positive + negative fixtures; must print all PASS). |
 | **R2 Hydration** | If `dependency_graph.json` exists, never modify code before `/graph:hydrate <node_id>` of the relevant node with every pre-modification check ticked. If the node does not exist, create it first (init refresh or manual addition passing R1). If the user explicitly asks to skip, state the risk in one sentence, log the skip in Unresolved Edges, proceed. |
 | **R3 Handover fidelity** | Nothing a successor needs lives outside the graph and its entity files (D30): verbatim decisions and reasons, identifiers chosen or renamed, options rejected and the user's words go into the entity of the node they concern; anything unresolved is an issue node with owner and trigger. |
-| **R4 Interaction language** | Every question, recommendation table, approval request, proposal (split / fold / component) and checklist shown to the user is written in `config.interaction_language` (inferred from CLAUDE.md and the user's messages when unset). Graph contents, handover file, SKILL text stay English. |
+| **R4 Interaction language** | Every question, recommendation table, approval request, proposal (split / fold / component) and checklist shown to the user is written in `config.interaction_language` (inferred from CLAUDE.md and the user's messages when unset). Graph contents, entity files, generated views and SKILL text stay English. |
 | **R5 Structure follows design docs** | `/graph:init` never generates `task`. Decision / issue nodes exist only when referenced from a document in scope or from registry text of a referenced id. Every decision / issue is attached (`part_of`) to ≥ 1 component / feature / function. |
-| **R6 Footprint** | The skill writes only to: `dependency_graph.json`, `graph_tool.log` and `<handover>.prev.md` (next to the handover file), the file at `config.handover_path`, the marked block in `CLAUDE.md`, the marked block in `.gitignore`. Never design docs, registries, source code, other handover files, `.claude/settings*.json`, or Claude memory. A write outside the footprint is refused and reported. |
+| **R6 Footprint** | The skill writes only to: `dependency_graph.json`, the entity files under `docs/entities/`, the generated views (`config.views[].path`), `.context/graph_tool.log`, the marked block in `CLAUDE.md`, the marked block in `.gitignore`. Never design docs, registries, source code, handover documents, `.claude/settings*.json`, or Claude memory. A write outside the footprint is refused and reported. |
 | **R7 Always-visible top layer** | Hydrate output begins with the table of all `component` nodes, regardless of hop distance. |
 | **R9 Numbers come from the tool** | Any id, hop, count, path status, timestamp or candidate list shown in a checklist or proposal must be copied from `graph_tool.py` output, never retyped or recomputed by hand. A pause is complete only when `graph_tool.py gate` prints `RESULT: OK` (D30). If the tool cannot run (no python3), say so and mark every such value `(manual)`. |
 | **R8 No reinvention** | Before proposing any new feature or function, search `nodes` (name, docs, code_targets) across all components and present matches. Never propose a new component autonomously; that is a user decision. Violations are logged in Unresolved Edges. |
