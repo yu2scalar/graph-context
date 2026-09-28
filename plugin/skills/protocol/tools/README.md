@@ -8,7 +8,8 @@
 | command | writes? | what it does |
 |---|---|---|
 | `validate` | no | JSON Schema (if `jsonschema` is installed) + every R1 rule; exit 1 on errors |
-| `hydrate <node_id>` | `current_node` | full Impact Assessment Checklist for the node (hops 0–2 over all edge kinds, both directions) |
+| `gate` | no | completion gate (D30): FAIL (exit 1) on an uncommitted tree (untracked files included), `current_node` unset or missing while PLANNED / IN_PROGRESS / BLOCKED nodes exist, an open issue without owner + trigger, no `next` while work is pending, validate errors (incl. view drift), content-layer errors; WARN only for commits in the link set (unpushed `@{u}..HEAD`, else the last 20) that name no node / registry id. Writes nothing, logs nothing |
+| `hydrate <node_id>` | `current_node` (nothing when unchanged, u48) | full Impact Assessment Checklist for the node (hops 0–2 over all edge kinds, both directions) |
 | `check` | no | growth candidates, fold candidates, staleness (timestamp + D24 content layer), proposals (`--lang ja`) |
 | `handover-tables` | no | Markdown for handover §2, §6 lines, §7 table — paste verbatim (D25) |
 | `fold <victim> <survivor>` | yes | fold a superseded decision into the survivor: the victim is kept as a hidden history node (`wip_status: FOLDED`, survivor `supersedes` it); resolved issues need no fold (hidden by status) |

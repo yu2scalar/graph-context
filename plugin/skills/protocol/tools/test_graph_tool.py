@@ -222,5 +222,42 @@ def main():
         os.chdir(cwd); shutil.rmtree(tmp)
     return 0 if ok else 1
 
+def test_gate():
+    """D30 completion gate: read-only; FAIL on a dirty tree, an open issue without trigger, no next; WARN only for unlinked commits."""
+    import io, contextlib, subprocess
+    tmp = tempfile.mkdtemp(); cwd = os.getcwd(); os.chdir(tmp)
+    git = lambda *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], capture_output=True, text=True, check=True)
+    class A: graph = "dependency_graph.json"; lang = "en"
+    def gate():
+        b = io.StringIO()
+        with contextlib.redirect_stdout(b): rc = gt.cmd_gate(gt.load(A.graph), A)
+        return rc, b.getvalue()
+    try:
+        git("init", "-q")
+        g = {"current_node": "w", "config": {"registries": []}, "nodes": {
+            "c": {"id": "c", "type": "component", "name": "C", "docs": [], "code_targets": []},
+            "w": {"id": "w", "type": "function", "name": "W", "docs": [], "code_targets": [], "part_of": ["c"], "wip_status": "IN_PROGRESS", "next": True},
+            "i": {"id": "i", "type": "issue", "name": "I", "docs": [], "code_targets": [], "part_of": ["w"], "issue_status": "open", "owner": "user", "trigger": "t"}}}
+        gt.save(A.graph, g); git("add", "-A"); git("commit", "-qm", "w: start")
+        before = open(A.graph).read()
+        rc, out = gate(); assert rc == 0 and "RESULT: OK" in out and "/graph:hydrate w" in out, out
+        assert open(A.graph).read() == before and not os.path.exists(gt.LOG_PATH), "gate writes nothing"
+        git("commit", "-q", "--allow-empty", "-m", "unrelated tweak")
+        rc, out = gate(); assert rc == 0 and "| WARN | commits name" in out and "unrelated tweak" in out, out
+        open("x.txt", "w").write("x")
+        rc, out = gate(); assert rc == 1 and "| FAIL | working tree committed" in out and "x.txt" in out, out
+        os.remove("x.txt")
+        g["nodes"]["i"].pop("trigger"); g["nodes"]["w"]["next"] = False; gt.save(A.graph, g); git("commit", "-qam", "i, w")
+        rc, out = gate(); assert rc == 1 and "missing on i" in out and "| FAIL | a next item exists" in out, out
+        g["nodes"]["i"]["trigger"] = "t"; g["nodes"]["w"]["next"] = True; g["current_node"] = None; gt.save(A.graph, g); git("commit", "-qam", "w")
+        rc, out = gate(); assert rc == 1 and "unset while 1 nodes" in out, out
+        g["nodes"]["w"]["wip_status"] = "DONE"; g["nodes"]["w"]["next"] = False; gt.save(A.graph, g); git("commit", "-qam", "w done")
+        rc, out = gate(); assert rc == 0 and "no pending work" in out, out
+        print("test_gate: all assertions hold"); return 0
+    except AssertionError as e:
+        print("FAIL:", e); return 1
+    finally:
+        os.chdir(cwd); shutil.rmtree(tmp)
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main() or test_gate())

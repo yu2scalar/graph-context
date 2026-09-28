@@ -2,12 +2,15 @@
 """graph_tool.py — protocol-as-code for the graph plugin (D26).
 
 Runs the mechanical parts of the graph-context protocol so that Claude executes them instead of
-re-deriving them from prose. Read-only: validate, check, handover-tables (incl. --verify), lint-prose, lint-handover,
+re-deriving them from prose. Read-only: validate, gate, check, handover-tables (incl. --verify), lint-prose, lint-handover,
 hydrate --dry-run, backlog. Writing: hydrate (current_node), fold, split, set-status, add-edge, set-current, add-node, add-doc, add-code,
 set-next, set-issue, close.
 
 Usage (run from the project root that holds dependency_graph.json):
   graph_tool.py validate                      R1 + schema (schema needs `jsonschema`; degrades with a warning)
+  graph_tool.py gate                          completion gate (D30), read-only: FAIL (exit 1) on an uncommitted tree, current_node unset
+                                              while work is pending, an open issue without owner + trigger, no `next`, validate or
+                                              content-layer errors; WARN for unpushed commits (@{u}..HEAD, else last 20) naming no id
   graph_tool.py hydrate <node_id>             hop 0-2 subgraph, components, files, re-examine, capabilities,
                                               staleness (timestamp + content), blast radius; sets current_node
   graph_tool.py check                         growth / fold candidates, staleness (both layers)
@@ -727,6 +730,51 @@ def cmd_check(g, args):
     print("\n### Proposals (" + args.lang + ")")
     for l in proposals(g, args.lang): print("- " + l)
     return 0
+
+GATE_NO_UPSTREAM_COMMITS = 20
+
+def git_lines(*cmd):
+    r = subprocess.run(["git", *cmd], capture_output=True, text=True)
+    return r.returncode, [l for l in r.stdout.splitlines() if l.strip()]
+
+def link_set():
+    """Commits the commit-link warning checks (plan-gate Qb): unpushed commits @{u}..HEAD; the last 20 when there is no upstream."""
+    rc, out = git_lines("log", "--format=%h %s", "@{u}..HEAD")
+    if rc == 0: return "unpushed commits (@{u}..HEAD)", out
+    rc, out = git_lines("log", "--format=%h %s", f"-{GATE_NO_UPSTREAM_COMMITS}")
+    return f"no upstream: last {GATE_NO_UPSTREAM_COMMITS} commits", out if rc == 0 else []
+
+def cmd_gate(g, args):
+    """Completion gate (D30): read-only; FAIL (exit 1) when the pause is not complete. Writes nothing, logs nothing."""
+    ns = g["nodes"]; rows = []  # (result, check, detail)
+    def add(ok, check, detail, warn=False): rows.append(("PASS" if ok else ("WARN" if warn else "FAIL"), check, detail))
+    rc, dirty = git_lines("status", "--porcelain")
+    add(rc == 0 and not dirty, "working tree committed", "clean" if rc == 0 and not dirty else ("not a git repository" if rc else f"{len(dirty)} uncommitted paths: " + ", ".join(l[3:] for l in dirty[:8]) + (" …" if len(dirty) > 8 else "")))
+    pending = sorted(k for k, n in ns.items() if not hidden(n) and n.get("wip_status") in ("PLANNED", "IN_PROGRESS", "BLOCKED"))
+    cur = g.get("current_node")
+    if pending:
+        add(cur is not None and cur in ns, "current_node set", f"`{cur}`" if cur in ns else (f"`{cur}` not in nodes" if cur else f"unset while {len(pending)} nodes are PLANNED / IN_PROGRESS / BLOCKED"))
+    else:
+        add(cur is None or cur in ns, "current_node set", f"`{cur}` (no pending work)" if cur else "null (no pending work)")
+    bare = sorted(k for k, n in ns.items() if n["type"] == "issue" and n.get("issue_status", "open") == "open" and not (n.get("owner") and n.get("trigger")))
+    add(not bare, "open issues have owner + trigger", "all" if not bare else "missing on " + ", ".join(bare))
+    nxt = sorted(k for k, n in ns.items() if n.get("next") and not hidden(n))
+    add(bool(nxt) or not pending, "a next item exists", ", ".join(nxt) if nxt else ("none, and no pending work" if not pending else f"none while {len(pending)} nodes are pending — run `set-next`"))
+    problems, _ = validate(g)
+    add(not problems, "validate (R1, schema, entity files, views)", "OK" if not problems else f"{len(problems)} errors: " + "; ".join(problems[:3]) + (" …" if len(problems) > 3 else ""))
+    cerr = [f for f in content_checks(g) if f[0] == "error"]
+    add(not cerr, "content layer (D24)", "no errors" if not cerr else "; ".join(f"{f[1]}: {f[2]}" for f in cerr[:3]))
+    what, commits = link_set()
+    ids = set(ns) | {n["source_ref"] for n in ns.values() if n.get("source_ref")}
+    idre = re.compile(r"(?<![\w-])(" + "|".join(sorted(map(re.escape, ids), key=len, reverse=True)) + r")(?![\w-])", re.I) if ids else None
+    unlinked = [c for c in commits if not (idre and idre.search(c.split(" ", 1)[1] if " " in c else ""))]
+    add(not unlinked, "commits name a node or registry id", f"{what}: {len(commits)} checked" + ("" if not unlinked else f", unlinked: " + "; ".join(unlinked[:5])), warn=True)
+    print("## gate (D30 completion gate — read-only)")
+    print(table(["result", "check", "detail"], rows))
+    fail = any(r[0] == "FAIL" for r in rows)
+    print("RESULT:", "FAIL" if fail else "OK")
+    if not fail: print(f"The pause is complete: the successor runs `/graph:hydrate {cur}`." if cur else "The pause is complete: no pending work.")
+    return 1 if fail else 0
 
 def handover_blocks(g):
     """Return the generated blocks as dict name -> list of lines (used by handover-tables and --verify)."""
@@ -1598,7 +1646,7 @@ def main(argv=None):
         p = sub.add_parser(name); p.add_argument("--lang", default=None, choices=["en", "ja"], dest="lang_sub")
         for a in posargs: p.add_argument(a, nargs=nargs) if nargs and a == posargs[-1] else p.add_argument(a)
         return p
-    sp("validate"); sp("hydrate", "node"); sp("check"); sp("handover-tables")
+    sp("validate"); sp("gate"); sp("hydrate", "node"); sp("check"); sp("handover-tables")
     sp("fold", "victim", "survivor"); sp("split", "node", "children", nargs="+")
     sp("set-status", "node", "status"); sp("add-edge", "src", "kind", "dst"); sp("set-current", "node"); sp("lint-prose")
     p = sp("lint-handover", "handover"); p.add_argument("--prev", default=None, metavar="PREV_HANDOVER_MD")
@@ -1629,7 +1677,7 @@ def main(argv=None):
     if args.lang not in ("en", "ja"): args.lang = "en"
     before = md5(args.graph)
     try:
-      rc = {"validate": cmd_validate, "hydrate": cmd_hydrate, "check": cmd_check, "handover-tables": cmd_handover_tables,
+      rc = {"validate": cmd_validate, "gate": cmd_gate, "hydrate": cmd_hydrate, "check": cmd_check, "handover-tables": cmd_handover_tables,
           "fold": cmd_fold, "split": cmd_split, "set-status": cmd_set_status, "add-edge": cmd_add_edge, "set-current": cmd_set_current,
           "add-node": cmd_add_node, "lint-prose": cmd_lint_prose, "lint-handover": cmd_lint_handover,
           "add-doc": cmd_add_path, "add-code": cmd_add_path, "backlog": cmd_backlog, "set-next": cmd_set_next,
