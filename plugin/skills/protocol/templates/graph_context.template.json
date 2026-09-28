@@ -4,7 +4,6 @@
   "nodes": {},
   "config": {
     "interaction_language": "en",
-    "handover_path": ".context/WIP_HANDOVER.md",
     "design_root": "docs/",
     "docs_scope": [
       "docs/**/*.md"

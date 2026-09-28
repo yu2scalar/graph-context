@@ -65,7 +65,7 @@ Only these, all removable by `/graph:uninstall`:
 | Path | Purpose |
 |------|---------|
 | `dependency_graph.json` | the graph and its `config` |
-| `config.handover_path` (default `.context/WIP_HANDOVER.md`) | the handover |
+| `.context/graph_tool.log` | the operations log (one line per write) |
 | one marked block in `CLAUDE.md` | the protocol instructions for Claude |
 | one marked block in `.gitignore` | ignores `.context/` |
 

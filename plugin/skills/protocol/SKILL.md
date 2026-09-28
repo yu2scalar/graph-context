@@ -30,7 +30,7 @@ holds content; it holds references to where the content lives and the relations 
 | `${CLAUDE_SKILL_DIR}/references/` | Full data model, public decision register, sync notes. |
 | `${CLAUDE_SKILL_DIR}/tools/graph_tool.py` | **The executable protocol (D26).** Read-only: `validate`, `check`, `handover-tables [--verify F]`, `lint-prose`, `lint-handover F`, `hydrate --dry-run`. Writing: `hydrate <node>` (current_node), `fold`, `split`, `set-status`, `add-edge`, `set-current`, `add-node`, `add-doc`, `add-code`. Every number, id, hop, path status and timestamp shown to the user comes from this tool (R9). Full list: `tools/README.md`. |
 | `${CLAUDE_PLUGIN_ROOT}/skills/{install,uninstall,init,hydrate,handover,compact}/SKILL.md` | Six thin delegating skills → `/graph:<name>` (D16, D21). Each reads this file and executes the matching section. |
-| `config.handover_path` (default `.context/WIP_HANDOVER.md`) | Handover written by `/graph:handover`. |
+| `.context/graph_tool.log` | Operations log: one line per accepted write (graph md5 before → after). Fixed path since D30 (`config.handover_path` retired; `migrate --drop-handover-path`). |
 
 ## Data model (summary; schema is authoritative)
 
@@ -67,7 +67,6 @@ and the fields `file` + `sha256` (entity text file, written by graph_tool only) 
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `interaction_language` | inferred | language for every question, recommendation, approval, checklist shown to the user |
-| `handover_path` | `.context/WIP_HANDOVER.md` | where `/graph:handover` writes |
 | `design_root` | detected | directory whose document structure the feature/function layer mirrors |
 | `docs_scope` | `<design_root>/**/*.md` | globs `/graph:init` reads |
 | `registries[]` | `[]` | `{type, id_pattern, file}`: how decision/issue ids are recognised and where their text lives |

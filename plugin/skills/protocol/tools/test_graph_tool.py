@@ -208,6 +208,13 @@ def main():
         assert rc == 0 and g20["nodes"]["d-009"]["wip_status"] == "FOLDED" and "d-009" in g20["nodes"]["d-003"]["supersedes"], out
         assert "folded" not in g20["nodes"]["d-003"] and "Folded" not in gt.entity_sections(g20["nodes"]["d-003"]["file"]), "folded[] and the Folded section must be gone"
         assert "| D-009 | old rule |" in open(g20["nodes"]["d-009"]["file"]).read()
+        # D30: config.handover_path is retired — validate names the migrate; migrate removes it and moves the log
+        g21 = gt.load(p); g21["config"]["handover_path"] = "docs/ho/WIP.md"; gt.save(p, g21)
+        problems, _ = gt.validate(gt.load(p), want_schema=False); assert any("--drop-handover-path" in x for x in problems), problems
+        os.makedirs("docs/ho", exist_ok=True); shutil.move(gt.LOG_PATH, "docs/ho/graph_tool.log"); nlog = open("docs/ho/graph_tool.log").read().count("\n")
+        rc, out = _run(gt.cmd_migrate, q(dry_run=False, plans=False, retire_registry=None, strip_graph_copies=False, restore_folds=False, drop_handover_path=True))
+        assert rc == 0 and "handover_path" not in gt.load(p)["config"] and not os.path.exists("docs/ho/graph_tool.log"), out
+        assert open(gt.LOG_PATH).read().count("\n") == nlog + 1, "log moved, then the migrate line appended"
         print("test_graph_tool: all assertions hold")
     except AssertionError as e:
         ok = False; print("FAIL:", e)

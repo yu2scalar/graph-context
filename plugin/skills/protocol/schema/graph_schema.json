@@ -220,10 +220,6 @@
           "type": "string",
           "minLength": 2
         },
-        "handover_path": {
-          "description": "File /graph-handover writes. Default .context/WIP_HANDOVER.md.",
-          "$ref": "#/$defs/filePath"
-        },
         "design_root": {
           "description": "Directory whose document structure the feature/function layer mirrors, e.g. docs/design/.",
           "$ref": "#/$defs/filePath"

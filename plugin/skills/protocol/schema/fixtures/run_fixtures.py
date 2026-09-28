@@ -26,7 +26,7 @@ P1, P2 = "docs/design/decision-log.md", "docs/design/tbd-registry.md"
 good = {
     "current_node": "commit-protocol",
     "config": {
-        "interaction_language": "ja", "handover_path": "docs/handover/WIP_HANDOVER.md",
+        "interaction_language": "ja",
         "design_root": "docs/design/", "docs_scope": ["docs/design/**/*.md"],
         "registries": [{"type": "decision", "id_pattern": "^D-\\d{3}$", "file": P1},
                        {"type": "issue", "id_pattern": "^TBD-\\d{2}$", "file": P2}],
@@ -54,6 +54,7 @@ run("template", json.load(open(TEMPLATE)), True)
 run("full v2 graph", good, True)
 bad("root extra key rejected", lambda b: b.__setitem__("version", 1))
 bad("config unknown key rejected", lambda b: b["config"].__setitem__("code_roots", ["src/"]))
+bad("handover_path rejected (retired, D30)", lambda b: b["config"].__setitem__("handover_path", ".context/WIP_HANDOVER.md"))
 bad("missing config rejected", lambda b: b.pop("config"))
 bad("component with part_of rejected", lambda b: b["nodes"]["core"].__setitem__("part_of", ["settler"]))
 bad("part_of >1 rejected", lambda b: b["nodes"]["commit-protocol"].__setitem__("part_of", ["core", "settler"]))

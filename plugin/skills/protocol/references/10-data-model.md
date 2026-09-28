@@ -12,7 +12,6 @@
 | Key | Default | Definition |
 |-----|---------|------------|
 | `interaction_language` | inferred | BCP-47; language for every question, recommendation, approval, checklist shown to the user. Artifacts stay English |
-| `handover_path` | `.context/WIP_HANDOVER.md` | file the handover command writes |
 | `design_root` | detected | directory whose document structure the feature/function layer mirrors |
 | `docs_scope` | `<design_root>/**/*.md` | globs init reads |
 | `registries[]` | `[]` | `{type: decision\|issue, id_pattern: <regex>, file: <path>}` — how registry ids are recognised and where their text lives |

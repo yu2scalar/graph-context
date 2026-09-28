@@ -39,11 +39,11 @@ Usage (run from the project root that holds dependency_graph.json):
   graph_tool.py hydrate --dry-run <node>      same output, no current_node write
 Options: --graph PATH (default dependency_graph.json). --lang ja|en may be given before or after the sub-command;
 default = config.interaction_language. Tables stay English; proposal sentences follow --lang.
-Every write is appended to <dir of handover_path>/graph_tool.log; every run ends with a footer line
+Every write is appended to .context/graph_tool.log; every run ends with a footer line
 `<!-- graph_tool <cmd> @<git head> graph md5 <before>[ -> <after> (WRITTEN)] -->`.
 Exit code: 0 ok, 1 = validation errors or bad usage.
 """
-import argparse, datetime, hashlib, json, os, re, subprocess, sys
+import argparse, datetime, hashlib, json, os, re, shutil, subprocess, sys
 from collections import Counter, defaultdict
 
 EDGES = ("part_of", "depends_on", "affects", "resolves", "supersedes")
@@ -112,9 +112,10 @@ def newer(a, b):
     if db.tzinfo is None: db = db.astimezone()
     return da > db
 
+LOG_PATH = ".context/graph_tool.log"  # fixed since D30 (config.handover_path retired; migrate --drop-handover-path)
+
 def log_path(g):
-    hp = g.get("config", {}).get("handover_path", ".context/WIP_HANDOVER.md")
-    return os.path.join(os.path.dirname(hp) or ".", "graph_tool.log")
+    return LOG_PATH
 
 def log_op(g, line, graph_path="dependency_graph.json", before=None):
     lp = log_path(g)
@@ -229,6 +230,8 @@ def validate(g, want_schema=True, drift=True):
             warnings.append("jsonschema not installed — schema layer skipped, R1 checks only")
         except FileNotFoundError:
             warnings.append(f"schema file not found at {SCHEMA_PATH} — schema layer skipped")
+    if "handover_path" in g.get("config", {}):
+        problems.append("config.handover_path is retired (D30: no authored handover) — run `graph_tool.py migrate --drop-handover-path`")
     cur = g.get("current_node")
     if cur is not None and cur not in ns:
         problems.append(f"current_node `{cur}` not in nodes")
@@ -1408,8 +1411,28 @@ def restore_folds(g, args):
     log_op(g, f"migrate --restore-folds: {len(written)} history nodes restored ({', '.join(sorted(restored.values()))}); folded[] dropped", args.graph, b4)
     return cmd_validate(g, args)
 
+def drop_handover_path(g, args):
+    """D30: remove config.handover_path; move graph_tool.log to the fixed LOG_PATH when it lived elsewhere.
+    The authored handover file itself is reported, never deleted (it may hold text the user wants to keep)."""
+    cfg = g.get("config", {})
+    if "handover_path" not in cfg: print("nothing to do: config.handover_path is absent"); return 0
+    hp = cfg["handover_path"]; old_log = os.path.join(os.path.dirname(hp) or ".", "graph_tool.log")
+    move = os.path.normpath(old_log) != os.path.normpath(LOG_PATH) and os.path.exists(old_log)
+    if move and os.path.exists(LOG_PATH): print(f"ERROR: both `{old_log}` and `{LOG_PATH}` exist — merge them by hand first"); return 1
+    print("## migrate --drop-handover-path" + (" --dry-run" if args.dry_run else ""))
+    print(f"- remove config.handover_path (`{hp}`)")
+    if move: print(f"- move `{old_log}` -> `{LOG_PATH}`")
+    for f in (hp, os.path.splitext(hp)[0] + ".prev.md"):
+        if os.path.exists(f): print(f"- `{f}` is no longer read or written (D30); delete it by hand when nothing in it is needed")
+    if args.dry_run: return 0
+    b4 = md5(args.graph); del cfg["handover_path"]; guarded_save(args.graph, g)
+    if move: os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True); shutil.move(old_log, LOG_PATH)
+    log_op(g, f"migrate --drop-handover-path: removed config.handover_path `{hp}`" + (f", log moved from `{old_log}`" if move else ""), args.graph, b4)
+    return cmd_validate(g, args)
+
 def cmd_migrate(g, args):
     """Give every node without an entity file its file, mechanically and reproducibly (no judgment, no paraphrase)."""
+    if getattr(args, "drop_handover_path", False): return drop_handover_path(g, args)
     if getattr(args, "restore_folds", False): return restore_folds(g, args)
     if getattr(args, "strip_graph_copies", False): return strip_graph_copies(g, args)
     if getattr(args, "plans", False): return migrate_plans(g, args)
@@ -1592,7 +1615,7 @@ def main(argv=None):
     p = sp("append", "node", "text"); p.add_argument("--section", default=None)
     p = sp("attach", "node"); p.add_argument("--section", action="append"); p.add_argument("--as-plan", dest="as_plan", action="store_true")
     p = sp("render"); p.add_argument("--check", action="store_true")
-    p = sp("migrate"); p.add_argument("--dry-run", dest="dry_run", action="store_true"); p.add_argument("--plans", action="store_true"); p.add_argument("--retire-registry", dest="retire_registry", metavar="FILE"); p.add_argument("--strip-graph-copies", dest="strip_graph_copies", action="store_true"); p.add_argument("--restore-folds", dest="restore_folds", action="store_true")
+    p = sp("migrate"); p.add_argument("--dry-run", dest="dry_run", action="store_true"); p.add_argument("--plans", action="store_true"); p.add_argument("--retire-registry", dest="retire_registry", metavar="FILE"); p.add_argument("--strip-graph-copies", dest="strip_graph_copies", action="store_true"); p.add_argument("--restore-folds", dest="restore_folds", action="store_true"); p.add_argument("--drop-handover-path", dest="drop_handover_path", action="store_true")
     p = sp("rename", "node", "name")
     p = sp("config", "action"); p.add_argument("key", nargs="?"); p.add_argument("value", nargs="?")
     for name, a in ap._subparsers._group_actions[0].choices.items():
