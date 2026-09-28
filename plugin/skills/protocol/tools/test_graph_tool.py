@@ -56,6 +56,13 @@ def main():
         with _cl.redirect_stdout(_io.StringIO()): rc = gt.cmd_remove_edge(gt.load(p), RE)
         g_r = gt.load(p); assert rc == 0 and "supersedes" not in g_r["nodes"]["d-004x"]
         del g_r["nodes"]["d-003x"], g_r["nodes"]["d-004x"]; gt.save(p, g_r)
+        # G12: a write that changes nothing logs nothing
+        lp0 = gt.log_path(gt.load(p)); n0 = open(lp0).read().count("\n") if os.path.exists(lp0) else 0
+        class NE: graph = p; src = "d-002"; kind = "supersedes"; dst = "d-001"; lang = "en"
+        b_ = _io.StringIO()
+        with _cl.redirect_stdout(b_): rc = gt.cmd_add_edge(gt.load(p), NE)
+        n1 = open(lp0).read().count("\n") if os.path.exists(lp0) else 0
+        assert rc == 0 and "unchanged" in b_.getvalue() and n1 == n0, (b_.getvalue(), n0, n1)
         # u49: add-node --source-ref copies the registry row verbatim (like migrate); an unknown ref writes nothing
         open("docs/log.md", "a").write("| D-007 | seven, from the register 「quoted」 |\n")
         class AN: graph = p; id = "d-007"; type = "decision"; name = "seven"; part_of = "f"; doc = None; code = None; source_ref = "D-007"; status = None; next = False; owner = None; trigger = None; summary = None; lang = "en"
@@ -256,5 +263,34 @@ def test_gate():
     finally:
         os.chdir(cwd); shutil.rmtree(tmp)
 
+def test_install():
+    """install / uninstall: blocks appended without a blank line, idempotent, byte-identical restore (G3, G5)."""
+    import io, contextlib, hashlib
+    tmp = tempfile.mkdtemp(); cwd = os.getcwd(); os.chdir(tmp)
+    try:
+        open("CLAUDE.md", "w").write("# proj\nno final newline")  # .gitignore absent
+        before = hashlib.sha256(open("CLAUDE.md", "rb").read()).hexdigest()
+        def cli(*a):
+            b = io.StringIO()
+            with contextlib.redirect_stdout(b): rc = gt.main(list(a))
+            return rc, b.getvalue()
+        rc, out = cli("install", "--dry-run"); assert rc == 0 and not os.path.exists("dependency_graph.json") and "create from the template" in out, out
+        rc, out = cli("install"); assert rc == 0, out
+        g = gt.load("dependency_graph.json"); inst = g["config"]["install"]
+        assert inst["claude_md_sha256_before"] == before and inst["gitignore_sha256_before"] is None, inst
+        c = open("CLAUDE.md").read(); assert c == "# proj\nno final newline\n" + gt.CLAUDE_BLOCK, repr(c[:80])
+        assert open(".gitignore").read() == gt.GITIGNORE_BLOCK
+        rc, out = cli("install"); assert open("CLAUDE.md").read().count("graph-context:begin") == 1, "install is idempotent"
+        skill = open(os.path.join(HERE, "..", "SKILL.md"), encoding="utf-8").read()
+        assert all(l.strip() in skill for l in gt.CLAUDE_BLOCK.splitlines()), "SKILL.md shows the block the tool writes"
+        rc, out = cli("uninstall", "--dry-run"); assert rc == 0 and os.path.exists("dependency_graph.json"), out
+        rc, out = cli("uninstall"); assert rc == 0 and "restored byte-identical" in out, out
+        assert hashlib.sha256(open("CLAUDE.md", "rb").read()).hexdigest() == before and not os.path.exists(".gitignore") and not os.path.exists("dependency_graph.json") and not os.path.exists(".context"), os.listdir(".")
+        print("test_install: all assertions hold"); return 0
+    except AssertionError as e:
+        print("FAIL:", e); return 1
+    finally:
+        os.chdir(cwd); shutil.rmtree(tmp)
+
 if __name__ == "__main__":
-    sys.exit(main() or test_gate())
+    sys.exit(main() or test_gate() or test_install())

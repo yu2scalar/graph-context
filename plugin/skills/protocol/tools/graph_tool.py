@@ -7,6 +7,8 @@ hydrate --dry-run, backlog. Writing: hydrate (current_node), fold, split, set-st
 set-next, set-issue, close.
 
 Usage (run from the project root that holds dependency_graph.json):
+  graph_tool.py install [--dry-run]           seed dependency_graph.json, append the CLAUDE.md / .gitignore marked blocks, record config.install
+  graph_tool.py uninstall [--dry-run]         remove the footprint, restore CLAUDE.md / .gitignore and verify them against config.install
   graph_tool.py validate                      R1 + schema (schema needs `jsonschema`; degrades with a warning)
   graph_tool.py gate                          completion gate (D30), read-only: FAIL (exit 1) on an uncommitted tree, current_node unset
                                               while work is pending, an open issue without owner + trigger, no `next`, validate or
@@ -113,12 +115,100 @@ LOG_PATH = ".context/graph_tool.log"  # fixed since D30 (config.handover_path re
 def log_path(g):
     return LOG_PATH
 
-def log_op(g, line, graph_path="dependency_graph.json", before=None):
+def log_op(g, line, graph_path="dependency_graph.json", before=None, force=False):
+    """One line per accepted write. A write that left the graph byte-identical is not logged (G12) unless `force`
+    (render: the graph is unchanged but view files were written)."""
+    after = md5(graph_path) if os.path.exists(graph_path) else "-"
+    if before and before == after and not force:
+        return
     lp = log_path(g)
     os.makedirs(os.path.dirname(lp) or ".", exist_ok=True)
-    after = md5(graph_path) if os.path.exists(graph_path) else "-"
     with open(lp, "a") as f:
         f.write(f"{now_iso()} @{git_head()} md5 {before or '?'} -> {after} {line}\n")
+
+# ---------------------------------------------------------------- install / uninstall (R6 footprint, Q-B of plan-protocol-text-7)
+TEMPLATE_PATH = os.path.normpath(os.path.join(HERE, "..", "templates", "graph_context.template.json"))
+PLUGIN_JSON = os.path.normpath(os.path.join(HERE, "..", "..", "..", ".claude-plugin", "plugin.json"))
+CLAUDE_BLOCK = """<!-- graph-context:begin -->
+## CRITICAL PROTOCOL (graph-context)
+- You must strictly follow the protocol of the `graph` plugin (skill `graph:protocol`, installed via `/plugin`).
+- Before modifying any feature or fixing bugs, verify if `dependency_graph.json` exists. If so, run `/graph:hydrate <node_id>` to load 1-hop/2-hop dependencies first.
+- When ending a session or pausing work, run `/graph:handover`: record the state on the graph through `graph_tool.py` and finish only when `graph_tool.py gate` prints `RESULT: OK`. No handover document is written; the next session starts with `/graph:hydrate <current_node>`.
+- Registry mapping (decision / issue ids \u2192 files) = `dependency_graph.json` \u2192 `config.registries`.
+<!-- graph-context:end -->
+"""
+GITIGNORE_BLOCK = "# graph-context:begin\n.context/\n# graph-context:end\n"
+BLOCKS = (("CLAUDE.md", CLAUDE_BLOCK, "<!-- graph-context:begin -->", "<!-- graph-context:end -->", "claude_md_sha256_before"),
+          (".gitignore", GITIGNORE_BLOCK, "# graph-context:begin", "# graph-context:end", "gitignore_sha256_before"))
+
+def sha_or_none(path):
+    return sha256_of(path) if os.path.exists(path) else None
+
+def git_tracked(path):
+    return subprocess.run(["git", "ls-files", "--error-unmatch", path], capture_output=True).returncode == 0
+
+def cmd_install(g, args):
+    """Seed the graph, append the two marked blocks, record sha256 snapshots (R6). --dry-run prints the footprint only.
+    The block is appended with no blank line before it (only a newline when the file lacks a final one), so uninstall can
+    restore the file byte-identical."""
+    rows = [("dependency_graph.json", "keep (exists)" if os.path.exists(args.graph) else "create from the template")]
+    for f, block, begin, _, _ in BLOCKS:
+        cur = open(f, encoding="utf-8").read() if os.path.exists(f) else None
+        rows.append((f, "keep (block present)" if cur and begin in cur else ("append the marked block" if cur is not None else "create with the marked block")))
+    rows.append((".context/graph_tool.log", "append one line"))
+    print("## install" + (" --dry-run" if args.dry_run else "")); print(table(["path", "action"], rows))
+    if args.dry_run: print("Nothing written. Ask the user, then run `install` without --dry-run."); return 0
+    snap = {k: sha_or_none(f) for f, _, _, _, k in BLOCKS}
+    if not os.path.exists(args.graph): shutil.copyfile(TEMPLATE_PATH, args.graph)
+    g = load(args.graph); b4 = md5(args.graph)
+    for f, block, begin, _, _ in BLOCKS:
+        cur = open(f, encoding="utf-8").read() if os.path.exists(f) else ""
+        if begin in cur: continue
+        open(f, "w", encoding="utf-8").write(cur + ("" if cur == "" or cur.endswith("\n") else "\n") + block)
+    if "install" not in g["config"]:
+        ver = json.load(open(PLUGIN_JSON)).get("version", "?") if os.path.exists(PLUGIN_JSON) else "?"
+        g["config"]["install"] = {"installed_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "skill_version": ver,
+                                  "claude_md_sha256_before": snap["claude_md_sha256_before"], "gitignore_sha256_before": snap["gitignore_sha256_before"]}
+    guarded_save(args.graph, g); log_op(g, "install: graph seeded / marked blocks appended / config.install recorded", args.graph, b4, force=True)
+    print("installed. Next: `/graph:init`."); return cmd_validate(g, args)
+
+def strip_block(path, begin, end, before):
+    """Remove the marked block (begin..end line incl. its newline); undo the newline install added when the file lacked one.
+    Returns the restored text, or None when the file should not exist."""
+    txt = open(path, encoding="utf-8").read()
+    a = txt.find(begin); b = txt.find(end, a)
+    if a < 0 or b < 0: return txt
+    b = txt.find("\n", b); b = len(txt) if b < 0 else b + 1
+    out = txt[:a] + txt[b:]
+    h = lambda t: hashlib.sha256(t.encode("utf-8")).hexdigest()
+    if before is None and out == "": return None
+    if before and h(out) != before and out.endswith("\n") and h(out[:-1]) == before: out = out[:-1]
+    return out
+
+def cmd_uninstall(g, args):
+    """Remove the footprint (R6) and verify CLAUDE.md / .gitignore byte-identical to the install snapshot. --dry-run lists only."""
+    inst = g["config"].get("install")
+    if not inst: print("ERROR: config.install missing — this graph was not installed by `install`; remove the footprint by hand"); return 1
+    files = [args.graph] + sorted({n["file"] for n in g["nodes"].values() if n.get("file") and os.path.exists(n["file"])}) \
+            + [v["path"] for v in g["config"].get("views", []) if os.path.exists(v["path"])] + [f for f in (LOG_PATH, ".context/WIP_HANDOVER.md", ".context/WIP_HANDOVER.prev.md") if os.path.exists(f)]
+    rows = [(f, "delete file", "tracked" if git_tracked(f) else "untracked") for f in files]
+    rows += [(f, "strip marked block", "tracked" if git_tracked(f) else "untracked") for f, *_ in BLOCKS if os.path.exists(f)]
+    print("## uninstall" + (" --dry-run" if args.dry_run else "")); print(table(["path", "action", "git"], rows))
+    if args.dry_run: print("Nothing removed. Ask the user, then run `uninstall` without --dry-run."); return 0
+    res = []
+    for f, _, begin, end, key in BLOCKS:
+        if not os.path.exists(f): continue
+        out = strip_block(f, begin, end, inst.get(key))
+        if out is None: os.remove(f); res.append((f, "removed (did not exist before install)"))
+        else:
+            open(f, "w", encoding="utf-8").write(out)
+            ok = sha_or_none(f) == inst.get(key); res.append((f, "restored byte-identical" if ok else "differs from the install snapshot (edits outside the markers are kept)"))
+    for f in files: os.remove(f)
+    for d in sorted({os.path.dirname(f) for f in files if os.path.dirname(f)}, key=len, reverse=True):
+        if os.path.isdir(d) and not os.listdir(d): os.rmdir(d)
+    print(table(["path", "result"], res))
+    if any(r[2] == "tracked" for r in rows): print("Some removed paths were tracked by git: `git rm` / commit them together.")
+    print("The plugin itself: `/plugin uninstall graph@graph-context` (a skill cannot uninstall itself)."); return 0
 
 # ---------------------------------------------------------------- graph helpers
 def adjacency(ns):
@@ -927,7 +1017,8 @@ def cmd_add_edge(g, args):
     for x in (args.src, args.dst):
         if x not in ns: print(f"ERROR: `{x}` not in nodes"); return 1
     lst = ns[args.src].setdefault(args.kind, [])
-    if args.dst not in lst: lst.append(args.dst)
+    if args.dst in lst: print(f"unchanged: {args.src}.{args.kind} -> {args.dst} already exists"); return 0
+    lst.append(args.dst)
     b4 = md5(args.graph); guarded_save(args.graph, g); log_op(g, f"add-edge {args.src}.{args.kind} -> {args.dst}", args.graph, b4)
     print(f"added {args.src}.{args.kind} -> {args.dst}")
     return cmd_validate(g, args)
@@ -1438,7 +1529,7 @@ def cmd_render(g, args):
                 os.makedirs(os.path.dirname(v["path"]) or ".", exist_ok=True); open(v["path"], "w", encoding="utf-8").write(want)
             rows.append((v["path"], v["kind"], "unchanged" if cur == want else "written"))
     print("## render" + (" --check" if args.check else "")); print(table(["path", "kind", "result"], rows))
-    if not args.check and any(r[2] == "written" for r in rows): log_op(g, "render " + ", ".join(r[0] for r in rows if r[2] == "written"), args.graph, md5(args.graph))
+    if not args.check and any(r[2] == "written" for r in rows): log_op(g, "render " + ", ".join(r[0] for r in rows if r[2] == "written"), args.graph, md5(args.graph), force=True)
     bad = any(r[2] == "DRIFT" for r in rows); print("RESULT:", "FAIL" if bad else "OK"); return 1 if bad else 0
 
 def cmd_backlog(g, args):
@@ -1496,6 +1587,8 @@ def main(argv=None):
         p = sub.add_parser(name); p.add_argument("--lang", default=None, choices=["en", "ja"], dest="lang_sub")
         for a in posargs: p.add_argument(a, nargs=nargs) if nargs and a == posargs[-1] else p.add_argument(a)
         return p
+    p = sp("install"); p.add_argument("--dry-run", dest="dry_run", action="store_true")
+    p = sp("uninstall"); p.add_argument("--dry-run", dest="dry_run", action="store_true")
     sp("validate"); sp("gate"); sp("hydrate", "node"); sp("check")
     sp("fold", "victim", "survivor"); sp("split", "node", "children", nargs="+")
     sp("set-status", "node", "status"); sp("add-edge", "src", "kind", "dst"); sp("remove-edge", "src", "kind", "dst"); sp("set-current", "node"); sp("lint-prose")
@@ -1518,6 +1611,10 @@ def main(argv=None):
     for name, a in ap._subparsers._group_actions[0].choices.items():
         if name == "hydrate": a.add_argument("--dry-run", dest="dry_run", action="store_true"); a.add_argument("--history", action="store_true")
     args = ap.parse_args(argv)
+    if args.cmd == "install":  # the only command that runs before the graph exists
+        args.lang = args.lang_sub or args.lang or "en"
+        try: return cmd_install(None, args)
+        except WriteRefused as e: print(table(["severity", "finding"], [("error", p) for p in e.args[0]])); print("RESULT: FAIL"); return 1
     if not os.path.exists(args.graph):
         print(f"ERROR: {args.graph} not found (run from the project root, or pass --graph)"); return 1
     g = load(args.graph)
@@ -1525,7 +1622,7 @@ def main(argv=None):
     if args.lang not in ("en", "ja"): args.lang = "en"
     before = md5(args.graph)
     try:
-      rc = {"validate": cmd_validate, "gate": cmd_gate, "hydrate": cmd_hydrate, "check": cmd_check,
+      rc = {"validate": cmd_validate, "gate": cmd_gate, "uninstall": cmd_uninstall, "hydrate": cmd_hydrate, "check": cmd_check,
           "fold": cmd_fold, "split": cmd_split, "set-status": cmd_set_status, "add-edge": cmd_add_edge, "remove-edge": cmd_remove_edge, "set-current": cmd_set_current,
           "add-node": cmd_add_node, "lint-prose": cmd_lint_prose,
           "add-doc": cmd_add_path, "add-code": cmd_add_path, "backlog": cmd_backlog, "set-next": cmd_set_next,
@@ -1534,7 +1631,7 @@ def main(argv=None):
         print("## write refused — the graph would be invalid; nothing was written (U31)")
         print(table(["severity", "finding"], [("error", p) for p in e.args[0]]))
         print("RESULT: FAIL"); rc = 1
-    after = md5(args.graph)
+    after = md5(args.graph) if os.path.exists(args.graph) else "(removed)"
     print(f"\n<!-- graph_tool {args.cmd} @{git_head()} graph md5 {before}" + (f" -> {after} (WRITTEN)" if after != before else " (unchanged)") + " -->")
     return rc
 
