@@ -65,6 +65,8 @@ Only these, all removable by `/graph:uninstall`:
 | Path | Purpose |
 |------|---------|
 | `dependency_graph.json` | the graph and its `config` |
+| `docs/entities/<id>.md` | one entity file per node: the text of decisions, issues, plans, rules and structure nodes (written by the tool only) |
+| each `config.views[].path` (e.g. `docs/views/*.md`) | generated registers, current specification and plan views (never edited by hand) |
 | `.context/graph_tool.log` | the operations log (one line per write) |
 | one marked block in `CLAUDE.md` | the protocol instructions for Claude |
 | one marked block in `.gitignore` | ignores `.context/` |
@@ -79,8 +81,16 @@ structure. Root holds only `current_node`, `nodes`, `config`.
 **Edges**: `part_of` (child → parent, at most one), `depends_on`, `affects`, `resolves` (decision → issue),
 `supersedes` (decision → decision it replaces), `refines` (decision → decision it narrows; the target stays in force).
 
-**Registry linkage**: decision / issue nodes carry `source_ref` (e.g. `D-022`, `TBD-24`); `config.registries`
-says how such ids are recognised and which file holds their text.
+**Entity files**: every node's text lives in exactly one append-only file, `docs/entities/<id>.md`; status and
+edges live only in the graph. Readable registers are generated from both (`config.views`).
+
+**Issues and plans are nodes**: an issue carries `issue_status`, `owner` and `trigger`; a plan is a `plan` node whose
+steps are `PLANNED` nodes, the next one flagged `next`. `/graph:handover` is a gate that passes only when all of
+this is recorded and committed, so the next session needs nothing but `current_node`.
+
+**Registry linkage**: decision / issue nodes created from an existing register carry `source_ref` (e.g. `D-022`,
+`TBD-24`); `config.registries` says how such ids are recognised, and the register row is copied verbatim into the
+node's entity file.
 
 **Growth and compaction**: a feature starts as one node and is split into `function` children when attached
 decisions and issues reach `config.growth_threshold`; a superseded decision can be folded into the surviving one — it
@@ -95,18 +105,20 @@ Full data model and the public decision register: `plugin/skills/protocol/refere
 plugin/
 ├── .claude-plugin/plugin.json
 └── skills/
-    ├── protocol/                # /graph:protocol — SKILL.md, schema/, templates/, references/
+    ├── protocol/                # /graph:protocol — SKILL.md, schema/, templates/, references/, tools/
     ├── install/  uninstall/  init/  hydrate/  handover/  compact/   # thin delegating commands
 ```
 
 ## Executable protocol
 
 `plugin/skills/protocol/tools/graph_tool.py` performs the mechanical parts (validation, hop computation, growth /
-fold candidates, staleness in both layers, handover tables, fold, split). Claude runs it and presents the output;
-rule R9 forbids retyping any id, count or timestamp by hand. See `tools/README.md`.
+fold candidates, staleness in both layers, the completion gate, fold, split) and is the only writer of the graph,
+entity files and views. Claude runs it and presents the output; rule R9 forbids retyping any id, count or timestamp by
+hand, rule R12 forbids changing the store any other way. See `tools/README.md`.
 
 ## Enforced rules
 
 R1 cross-reference validation · R2 hydrate before modifying code · R3 handover fidelity ·
 R4 interaction language · R5 structure follows design docs · R6 bounded footprint ·
-R7 components always visible · R8 no reinvention · R9 numbers come from the tool. Full text in `plugin/skills/protocol/SKILL.md`.
+R7 components always visible · R8 no reinvention · R9 numbers come from the tool · R10 record, then ask ·
+R11 plans are nodes · R12 everything through a command. Full text in `plugin/skills/protocol/SKILL.md`.

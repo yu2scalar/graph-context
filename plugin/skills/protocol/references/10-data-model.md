@@ -4,7 +4,7 @@
 | Key | Required | Type | Definition |
 |-----|----------|------|------------|
 | `$schema` | no | string | editor hint; ignored by the skill |
-| `current_node` | yes | nodeId \| null | the single node being worked on now; must exist in `nodes`; written by hydrate and handover only |
+| `current_node` | yes | nodeId \| null | the single node being worked on now — the whole handover (D30); must exist in `nodes`; written by `hydrate` and `set-current` only |
 | `nodes` | yes | object<nodeId, node> | all nodes; key must equal `node.id` |
 | `config` | yes | object (closed) | project-wide settings written by the init Q&A, editable by hand |
 
@@ -14,7 +14,8 @@
 | `interaction_language` | inferred | BCP-47; language for every question, recommendation, approval, checklist shown to the user. Artifacts stay English |
 | `design_root` | detected | directory whose document structure the feature/function layer mirrors |
 | `docs_scope` | `<design_root>/**/*.md` | globs init reads |
-| `registries[]` | `[]` | `{type: decision\|issue, id_pattern: <regex>, file: <path>}` — how registry ids are recognised and where their text lives |
+| `registries[]` | `[]` | `{type: decision\|issue, id_pattern: <regex>, file: <path>, public_column?: <n>}` — how ids in existing registers are recognised; the register row is copied verbatim into the entity file (`add-node --source-ref`, `migrate`) |
+| `views[]` | absent | `{kind: decisions\|public-decisions\|issues\|current\|plans, path: <path>}` — documents generated from the graph and entity files on every accepted write |
 | `growth_threshold` | 5 | attached decision+issue count at which a split is proposed |
 | `backlog_filter` | absent (= all open issues) | `{owner: user\|claude, next_only: bool, component: <id>}` — project default for which open issues the Backlog lists; excluded ones are counted per component; command options override (D33) |
 | `install` | set by install | `{installed_at, skill_version, claude_md_sha256_before, gitignore_sha256_before}` |
@@ -48,7 +49,7 @@ Deliberately absent: `code_roots` (derived: union of component nodes' `code_targ
 ## Hierarchy and growth
 Root → component → feature → function. A feature starts as one node; when attached decisions+issues reach
 `growth_threshold`, or a decision applies to only part of it, handover proposes splitting into `function`
-children and the parent becomes an index node. A superseded decision is folded into the surviving
+children and the parent becomes an index node (proposal at `/graph:handover`, applied on approval). A superseded decision is folded into the surviving
 decision on approval: it stays as a node with `wip_status: FOLDED`, linked by the survivor's `supersedes`, hidden by default
 (D31, D37). Resolved issues are hidden by their `issue_status`. Nothing is deleted.
 
