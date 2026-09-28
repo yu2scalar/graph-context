@@ -61,6 +61,8 @@ bad("part_of >1 rejected", lambda b: b["nodes"]["commit-protocol"].__setitem__("
 bad("source_ref on feature rejected", lambda b: b["nodes"]["commit-protocol"].__setitem__("source_ref", "D-001"))
 bad("resolves on issue rejected", lambda b: b["nodes"]["tbd-24"].__setitem__("resolves", ["d-022"]))
 bad("folded field rejected (dropped, D37)", lambda b: b["nodes"]["d-022"].__setitem__("folded", ["D-001"]))
+bad("refines on feature rejected", lambda b: b["nodes"]["commit-protocol"].__setitem__("refines", ["d-022"]))
+bad("refines on issue rejected", lambda b: b["nodes"]["tbd-24"].__setitem__("refines", ["d-022"]))
 bad("supersedes on feature rejected", lambda b: b["nodes"]["commit-protocol"].__setitem__("supersedes", ["d-022"]))
 bad("registry missing file rejected", lambda b: b["config"]["registries"][0].pop("file"))
 bad("registry bad type rejected", lambda b: b["config"]["registries"][0].__setitem__("type", "feature"))

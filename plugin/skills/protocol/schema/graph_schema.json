@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/yu2scalar/graph-context/schema/graph_schema.json",
   "title": "Project Graph Context (v2)",
-  "description": "Index graph over a project's design documents and registries. Hierarchy: Root -> component -> feature -> function. Decisions and issues attach to components/features/functions. Invariants not expressible in JSON Schema and enforced by the skill (rule R1): every key of `nodes` equals that node's `id`; `current_node` and every edge target exist in `nodes`; no self-edges; `part_of` is acyclic; `resolves` is decision->issue only and its target has issue_status resolved; `supersedes` is decision->decision only; `source_ref` matches a `config.registries[].id_pattern` when registries are defined; non-component `code_targets` fall under some component's `code_targets`.",
+  "description": "Index graph over a project's design documents and registries. Hierarchy: Root -> component -> feature -> function. Decisions and issues attach to components/features/functions. Invariants not expressible in JSON Schema and enforced by the skill (rule R1): every key of `nodes` equals that node's `id`; `current_node` and every edge target exist in `nodes`; no self-edges; `part_of` is acyclic; `resolves` is decision->issue only and its target has issue_status resolved; `supersedes` and `refines` are decision->decision only; `source_ref` matches a `config.registries[].id_pattern` when registries are defined; non-component `code_targets` fall under some component's `code_targets`.",
   "type": "object",
   "additionalProperties": false,
   "required": ["current_node", "nodes", "config"],
@@ -109,7 +109,11 @@
           "$ref": "#/$defs/nodeIdList"
         },
         "supersedes": {
-          "description": "decision -> earlier decision it replaces or refines. Only on decision nodes; targets must be decision nodes.",
+          "description": "decision -> earlier decision it replaces. Only on decision nodes; targets must be decision nodes. A superseded decision with no other live in-edge is a fold candidate.",
+          "$ref": "#/$defs/nodeIdList"
+        },
+        "refines": {
+          "description": "decision -> earlier decision it narrows or details without replacing it (the target stays in force). Only on decision nodes; targets must be decision nodes. Never a fold candidate (u46).",
           "$ref": "#/$defs/nodeIdList"
         },
         "source_ref": {
@@ -155,11 +159,11 @@
         },
         {
           "if": { "properties": { "type": { "enum": ["component", "feature", "function", "plan", "rule", "task"] } }, "required": ["type"] },
-          "then": { "not": { "anyOf": [ { "required": ["source_ref"] }, { "required": ["resolves"] }, { "required": ["supersedes"] } ] } }
+          "then": { "not": { "anyOf": [ { "required": ["source_ref"] }, { "required": ["resolves"] }, { "required": ["supersedes"] }, { "required": ["refines"] } ] } }
         },
         {
           "if": { "properties": { "type": { "const": "issue" } }, "required": ["type"] },
-          "then": { "not": { "anyOf": [ { "required": ["resolves"] }, { "required": ["supersedes"] } ] } }
+          "then": { "not": { "anyOf": [ { "required": ["resolves"] }, { "required": ["supersedes"] }, { "required": ["refines"] } ] } }
         },
         {
           "if": { "properties": { "type": { "not": { "const": "issue" } } }, "required": ["type"] },

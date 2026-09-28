@@ -41,7 +41,7 @@ component, feature or function. `task` exists for manual use and is never genera
 
 **Node fields**: required `id`, `type`, `name`, `docs[]`, `code_targets[]`. Optional edges:
 `part_of` (≤1, child → parent), `depends_on`, `affects`, `resolves` (decision → issue only),
-`supersedes` (decision → decision only). Optional `source_ref` (registry id, decision/issue only,
+`supersedes` (decision → decision only), `refines` (decision → decision only; the target stays in force, never a fold candidate — u46). Optional `source_ref` (registry id, decision/issue only,
 single-valued), `wip_status`
 (`PLANNED` | `IN_PROGRESS` | `BLOCKED` | `DONE`; not on issues), `next` (bool, the item to take up next;
 not on component/decision). Issue nodes require `issue_status` (`open` | `resolved` | `transferred`) and may
@@ -59,7 +59,8 @@ and the fields `file` + `sha256` (entity text file, written by graph_tool only) 
 | issue impacts a feature/function/component | issue `affects` target |
 | decision constrains a feature/function/component | decision `affects` target |
 | decision resolves an issue | decision `resolves` issue |
-| decision replaces or refines an earlier decision | decision `supersedes` earlier decision |
+| decision replaces an earlier decision | decision `supersedes` earlier decision |
+| decision narrows or details an earlier decision that stays in force | decision `refines` earlier decision |
 | issue was raised by a decision | issue `depends_on` decision |
 
 **`config` keys**
@@ -214,6 +215,7 @@ registry text of another referenced id. Set `source_ref` verbatim; `docs` = the 
 - `resolves`: from registry text such as "resolves TBD-24", "closes", "決定により解消", or a TBD entry that
   names the D-id that closed it.
 - `supersedes`: from registry text such as "supersedes D-010", "replaces", "上書き", "置き換え".
+- `refines`: from registry text such as "refines D-010", "narrows", "details", "補足", "詳細化" (the earlier decision stays in force).
 - `depends_on`: from explicit "depends on / requires / after / blocked by / 前提" phrasing; for
   cross-component expectations, target the providing component's function/feature; create a stub node under
   the **providing** component if it does not exist (never under the requesting one).
@@ -242,7 +244,7 @@ Purpose: load the full 1-hop / 2-hop neighbourhood and produce the Impact Assess
    in the `registry entry` rows of Files loaded. Steps 1–6 describe what the tool computes; do not recompute them (R9).
 1. Resolve `<node_id>`; if absent, list the closest ids and stop. Do not guess.
 2. Subgraph: hop 0 = the node; hop 1 = every target and every source of any edge kind
-   (`part_of` both directions, `depends_on`, `affects`, `resolves`, `supersedes`); hop 2 = same expansion
+   (`part_of` both directions, `depends_on`, `affects`, `resolves`, `supersedes`, `refines`); hop 2 = same expansion
    from hop 1. Record hop distance and the edge path.
 3. Read every `docs` and `code_targets` path of every node in hops 0–2 in full (ranges for large files).
    For `decision`/`issue` nodes, read the `source_ref` entry in the registry file. Note missing paths.
@@ -339,7 +341,7 @@ successor's `/graph:hydrate <current_node>` output is the view. A pause is compl
    only part of the node's `code_targets`, or (c) its design document gained ≥ 2 top-level sections describing separate
    behaviours — (b) and (c) are judged by hand and, when proposed, marked `(manual)`. On approval: create `function` children with `part_of` the node, move the relevant `docs`,
    `code_targets` and decision/issue attachments to them, leave the parent with overview docs only.
-3. **Fold check (D31, D37)**: a candidate is a decision that is a `supersedes` target, has no other live in-edges and
+3. **Fold check (D31, D37)**: a candidate is a decision that is a `supersedes` target, has no other live in-edges (a `refines` in-edge is live, u46) and
    is not IN_PROGRESS / BLOCKED / FOLDED. On approval, `graph_tool.py fold <victim> <survivor>` **hides** it: the victim
    keeps its node and entity file, gets `wip_status: FOLDED`, the survivor `supersedes` it and inherits its `affects`.
    Folded decisions are hidden from hydrate by default (history count; `--history` shows them). Resolved issues need no
@@ -366,7 +368,7 @@ Growth and fold are proposals in the interaction language; they are never applie
 
 | Rule | Content |
 |------|---------|
-| **R1 Cross-reference validation** | Executed by `graph_tool.py validate`; the checks are: `nodes[k].id == k` (fix the key, never the id). Every target of `part_of` / `depends_on` / `affects` / `resolves` / `supersedes` and `current_node` exists. No self-edges. `part_of` ≤ 1 and acyclic. `resolves` only decision → issue, and its target has `issue_status: resolved`; `supersedes` only decision → decision. `source_ref` matches some `config.registries[].id_pattern` when registries are defined. Non-component `code_targets` fall under the union of component `code_targets`. Schema-valid (run `python3 -c "import json,jsonschema;jsonschema.Draft202012Validator(json.load(open('${CLAUDE_SKILL_DIR}/schema/graph_schema.json'))).validate(json.load(open('dependency_graph.json')));print('OK')"` when available; otherwise check manually and say so). Schema self-test: `python3 ${CLAUDE_SKILL_DIR}/schema/fixtures/run_fixtures.py` (positive + negative fixtures; must print all PASS). |
+| **R1 Cross-reference validation** | Executed by `graph_tool.py validate`; the checks are: `nodes[k].id == k` (fix the key, never the id). Every target of `part_of` / `depends_on` / `affects` / `resolves` / `supersedes` / `refines` and `current_node` exists. No self-edges. `part_of` ≤ 1 and acyclic. `resolves` only decision → issue, and its target has `issue_status: resolved`; `supersedes` and `refines` only decision → decision. `source_ref` matches some `config.registries[].id_pattern` when registries are defined. Non-component `code_targets` fall under the union of component `code_targets`. Schema-valid (run `python3 -c "import json,jsonschema;jsonschema.Draft202012Validator(json.load(open('${CLAUDE_SKILL_DIR}/schema/graph_schema.json'))).validate(json.load(open('dependency_graph.json')));print('OK')"` when available; otherwise check manually and say so). Schema self-test: `python3 ${CLAUDE_SKILL_DIR}/schema/fixtures/run_fixtures.py` (positive + negative fixtures; must print all PASS). |
 | **R2 Hydration** | If `dependency_graph.json` exists, never modify code before `/graph:hydrate <node_id>` of the relevant node with every pre-modification check ticked. If the node does not exist, create it first (init refresh or manual addition passing R1). If the user explicitly asks to skip, state the risk in one sentence, log the skip in Unresolved Edges, proceed. |
 | **R3 Handover fidelity** | Nothing a successor needs lives outside the graph and its entity files (D30): verbatim decisions and reasons, identifiers chosen or renamed, options rejected and the user's words go into the entity of the node they concern; anything unresolved is an issue node with owner and trigger. |
 | **R4 Interaction language** | Every question, recommendation table, approval request, proposal (split / fold / component) and checklist shown to the user is written in `config.interaction_language` (inferred from CLAUDE.md and the user's messages when unset). Graph contents, handover file, SKILL text stay English. |

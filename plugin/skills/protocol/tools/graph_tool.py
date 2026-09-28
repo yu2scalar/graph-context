@@ -3,7 +3,7 @@
 
 Runs the mechanical parts of the graph-context protocol so that Claude executes them instead of
 re-deriving them from prose. Read-only: validate, gate, check, lint-prose,
-hydrate --dry-run, backlog. Writing: hydrate (current_node), fold, split, set-status, add-edge, set-current, add-node, add-doc, add-code,
+hydrate --dry-run, backlog. Writing: hydrate (current_node), fold, split, set-status, add-edge, remove-edge, set-current, add-node, add-doc, add-code,
 set-next, set-issue, close.
 
 Usage (run from the project root that holds dependency_graph.json):
@@ -24,7 +24,8 @@ Usage (run from the project root that holds dependency_graph.json):
   graph_tool.py set-issue <issue> [--owner user|claude] [--trigger TEXT]   set owner / trigger of an issue, validate
   graph_tool.py close <issue> <resolved|transferred> --by <decision-id|commit|text>
                                               close an issue; when --by names a decision node, also add <decision>.resolves -> <issue>
-  graph_tool.py add-edge <src> <kind> <dst>   add one edge (part_of|depends_on|affects|resolves|supersedes), validate
+  graph_tool.py add-edge <src> <kind> <dst>   add one edge (part_of|depends_on|affects|resolves|supersedes|refines), validate
+  graph_tool.py remove-edge <src> <kind> <dst>   remove one edge, validate
   graph_tool.py set-current <node|null>       set current_node, validate
   graph_tool.py add-node <id> <type> "<name>" [--part-of P] [--doc PATH ...] [--code PATH ...] [--source-ref ID]
                      [--status S] [--next] [--owner user|claude] [--trigger TEXT]   (issue nodes get issue_status open)
@@ -41,7 +42,7 @@ Exit code: 0 ok, 1 = validation errors or bad usage.
 import argparse, datetime, hashlib, json, os, re, shutil, subprocess, sys
 from collections import Counter, defaultdict
 
-EDGES = ("part_of", "depends_on", "affects", "resolves", "supersedes")
+EDGES = ("part_of", "depends_on", "affects", "resolves", "supersedes", "refines")  # refines: decision -> decision it narrows but does not replace (u46); never a fold candidate
 WIP = ("PLANNED", "IN_PROGRESS", "BLOCKED", "DONE")
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCHEMA_PATH = os.path.normpath(os.path.join(HERE, "..", "schema", "graph_schema.json"))
@@ -246,9 +247,12 @@ def validate(g, want_schema=True, drift=True):
                 problems.append(f"{k}.resolves -> {t} is not an issue")
             elif t in ns and ns[t].get("issue_status", "open") != "resolved":
                 problems.append(f"{k}.resolves -> {t} but {t}.issue_status is {ns[t].get('issue_status', 'unset')} (must be resolved)")
-        for t in n.get("supersedes", []):
-            if t in ns and ns[t]["type"] != "decision":
-                problems.append(f"{k}.supersedes -> {t} is not a decision")
+        for e in ("supersedes", "refines"):
+            if n.get(e) and n["type"] != "decision":
+                problems.append(f"{k}.{e} on a {n['type']} (decision nodes only)")
+            for t in n.get(e, []):
+                if t in ns and ns[t]["type"] != "decision":
+                    problems.append(f"{k}.{e} -> {t} is not a decision")
         if n["type"] == "component" and n.get("part_of"):
             problems.append(f"component `{k}` has part_of")
         if len(n.get("part_of", [])) > 1:
@@ -461,6 +465,7 @@ def render_view(g, kind):
     ns = g["nodes"]; out = [VIEW_MARK.format(kind=kind), ""]
     sec = lambda k: entity_sections(ns[k]["file"]) if ns[k].get("file") and os.path.exists(ns[k]["file"]) else {}
     rel = lambda k: "; ".join(x for x in (("supersedes " + ", ".join(ns[k]["supersedes"])) if ns[k].get("supersedes") else "",
+                                          ("refines " + ", ".join(ns[k]["refines"])) if ns[k].get("refines") else "",
                                           ("resolves " + ", ".join(ns[k]["resolves"])) if ns[k].get("resolves") else "") if x) or "—"
     ref = lambda k: ns[k].get("source_ref", k)
     decs = sorted((k for k, n in ns.items() if n["type"] == "decision"), key=lambda k: (re.sub(r"\d", "", ref(k)), int(re.sub(r"\D", "", ref(k)) or 0)))
@@ -654,16 +659,16 @@ def cmd_hydrate(g, args):
         print(f"- hop {hop[k][0]} `{k}` ({n.get('source_ref', '—')}): {st_}" + (f" — folded: {', '.join(n['folded'])}" if n.get("folded") else ""))
     if not dec: print("- none")
     print()
-    print("### Decisions to re-examine (hop 0–1 decisions: affects ∪ resolves ∪ supersedes ∪ superseded-by ∪ same-parent decisions)")
+    print("### Decisions to re-examine (hop 0–1 decisions: affects ∪ resolves ∪ supersedes ∪ superseded-by ∪ refines ∪ refined-by ∪ same-parent decisions)")
     adj = adjacency(ns); rows = []
     for k in sorted(hop, key=lambda x: (hop[x][0], x)):
         if hop[k][0] <= 1 and ns[k]["type"] == "decision":
             n = ns[k]
-            rel = set(n.get("affects", [])) | set(n.get("resolves", [])) | set(n.get("supersedes", [])) | {s for s, e in adj[k] if e == "rev-supersedes"}
+            rel = set(n.get("affects", [])) | set(n.get("resolves", [])) | set(n.get("supersedes", [])) | set(n.get("refines", [])) | {s for s, e in adj[k] if e in ("rev-supersedes", "rev-refines")}
             parent = n.get("part_of", [None])[0]
             sib = sorted(j for j, m in ns.items() if m["type"] == "decision" and m.get("part_of") == [parent] and j != k)
             rows.append((k, n.get("source_ref", "—"), ", ".join(sorted(rel)) or "—", f"{len(sib)} siblings under `{parent}`"))
-    print(table(["decision", "registry id", "affects/resolves/supersedes", "same-parent"], rows)); print()
+    print(table(["decision", "registry id", "affects/resolves/supersedes/refines", "same-parent"], rows)); print()
     print("### Existing capabilities (R8 — name/path overlap across all components)")
     words = {w for w in re.split(r"[^a-z0-9]+", (origin + " " + ns[origin]["name"]).lower()) if len(w) > 3}
     rows = []
@@ -897,6 +902,17 @@ def cmd_set_status(g, args):
     else: ns[args.node]["wip_status"] = args.status
     b4 = md5(args.graph); guarded_save(args.graph, g); log_op(g, f"set-status {args.node} {old} -> {args.status}", args.graph, b4)
     print(f"{args.node}.wip_status: {old} -> {args.status}")
+    return cmd_validate(g, args)
+
+def cmd_remove_edge(g, args):
+    """Remove one edge (e.g. a supersedes that only ever meant refines, u46), then validate."""
+    ns = g["nodes"]
+    if args.kind not in EDGES: print(f"ERROR: kind must be one of {EDGES}"); return 1
+    if args.src not in ns or args.dst not in ns.get(args.src, {}).get(args.kind, []): print(f"ERROR: no edge {args.src}.{args.kind} -> {args.dst}"); return 1
+    ns[args.src][args.kind].remove(args.dst)
+    if not ns[args.src][args.kind]: del ns[args.src][args.kind]
+    b4 = md5(args.graph); guarded_save(args.graph, g); log_op(g, f"remove-edge {args.src}.{args.kind} -> {args.dst}", args.graph, b4)
+    print(f"removed {args.src}.{args.kind} -> {args.dst}")
     return cmd_validate(g, args)
 
 def cmd_add_edge(g, args):
@@ -1476,7 +1492,7 @@ def main(argv=None):
         return p
     sp("validate"); sp("gate"); sp("hydrate", "node"); sp("check")
     sp("fold", "victim", "survivor"); sp("split", "node", "children", nargs="+")
-    sp("set-status", "node", "status"); sp("add-edge", "src", "kind", "dst"); sp("set-current", "node"); sp("lint-prose")
+    sp("set-status", "node", "status"); sp("add-edge", "src", "kind", "dst"); sp("remove-edge", "src", "kind", "dst"); sp("set-current", "node"); sp("lint-prose")
     sp("add-doc", "node", "path"); sp("add-code", "node", "path")
     p = sp("add-node", "id", "type", "name"); p.add_argument("--part-of", dest="part_of"); p.add_argument("--doc", action="append"); p.add_argument("--code", action="append"); p.add_argument("--source-ref", dest="source_ref"); p.add_argument("--status")
     p.add_argument("--next", action="store_true"); p.add_argument("--owner", choices=["user", "claude"]); p.add_argument("--trigger"); p.add_argument("--summary")
@@ -1504,7 +1520,7 @@ def main(argv=None):
     before = md5(args.graph)
     try:
       rc = {"validate": cmd_validate, "gate": cmd_gate, "hydrate": cmd_hydrate, "check": cmd_check,
-          "fold": cmd_fold, "split": cmd_split, "set-status": cmd_set_status, "add-edge": cmd_add_edge, "set-current": cmd_set_current,
+          "fold": cmd_fold, "split": cmd_split, "set-status": cmd_set_status, "add-edge": cmd_add_edge, "remove-edge": cmd_remove_edge, "set-current": cmd_set_current,
           "add-node": cmd_add_node, "lint-prose": cmd_lint_prose,
           "add-doc": cmd_add_path, "add-code": cmd_add_path, "backlog": cmd_backlog, "set-next": cmd_set_next,
           "set-issue": cmd_set_issue, "close": cmd_close, "add": cmd_add, "append": cmd_append, "attach": cmd_attach, "migrate": cmd_migrate, "rename": cmd_rename, "config": cmd_config, "render": cmd_render}[args.cmd](g, args)

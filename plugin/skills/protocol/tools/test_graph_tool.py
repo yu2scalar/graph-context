@@ -44,6 +44,18 @@ def main():
         HD.history = True; b_ = _io.StringIO()
         with _cl.redirect_stdout(b_): gt.cmd_hydrate(gt.load(p), HD)
         assert "d-001" in b_.getvalue(), "--history shows folded nodes"
+        # u46: refines is a live in-edge that is never a fold candidate; remove-edge drops a supersedes
+        g_r = gt.load(p); g_r["nodes"]["d-003x"] = {"id": "d-003x", "type": "decision", "name": "three", "docs": [], "code_targets": [], "part_of": ["f"], "refines": ["d-002"], "wip_status": "DONE"}
+        g_r["nodes"]["d-004x"] = {"id": "d-004x", "type": "decision", "name": "four", "docs": [], "code_targets": [], "part_of": ["f"], "supersedes": ["d-002"], "wip_status": "DONE"}
+        assert not any(c[0] == "d-002" for c in gt.fold_candidates(g_r)), "a refined decision is no fold candidate"
+        g_r["nodes"]["d-003x"].pop("refines"); assert any(c[0] == "d-002" for c in gt.fold_candidates(g_r)), "superseded only -> candidate"
+        bad_r = json.loads(json.dumps(g_r)); bad_r["nodes"]["f"]["refines"] = ["d-002"]
+        assert any("decision nodes only" in x for x in gt.validate(bad_r, want_schema=False)[0])
+        gt.save(p, g_r)
+        class RE: graph = p; src = "d-004x"; kind = "supersedes"; dst = "d-002"; lang = "en"
+        with _cl.redirect_stdout(_io.StringIO()): rc = gt.cmd_remove_edge(gt.load(p), RE)
+        g_r = gt.load(p); assert rc == 0 and "supersedes" not in g_r["nodes"]["d-004x"]
+        del g_r["nodes"]["d-003x"], g_r["nodes"]["d-004x"]; gt.save(p, g_r)
         # u48: hydrate of the current node writes nothing (graph bytes and log unchanged)
         HD.dry_run = False; HD.history = False
         with _cl.redirect_stdout(_io.StringIO()): gt.cmd_hydrate(gt.load(p), HD)

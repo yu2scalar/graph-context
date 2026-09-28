@@ -33,7 +33,8 @@ Deliberately absent: `code_roots` (derived: union of component nodes' `code_targ
 | `depends_on` | no | nodeId[] | prerequisite / expectation (incl. cross-component: → providing component's function) ; issue→decision that raised it |
 | `affects` | no | nodeId[] | decision/issue → component/feature/function it constrains or impacts |
 | `resolves` | no | nodeId[] | decision → issue only |
-| `supersedes` | no | nodeId[] | decision → decision only |
+| `supersedes` | no | nodeId[] | decision → decision only; the target is replaced (fold candidate) |
+| `refines` | no | nodeId[] | decision → decision only; the target stays in force (never a fold candidate, u46) |
 | `source_ref` | no | string | registry id verbatim (`D-022`, `TBD-24`); decision/issue only; single-valued |
 | `wip_status` | no | enum | `PLANNED` \| `IN_PROGRESS` \| `BLOCKED` \| `DONE` \| `FOLDED`; `PLANNED` = not-yet-started plan step (D33, D34 R-b); on decisions the implementation state, `FOLDED` = absorbed by the superseding decision, hidden history (D31, D37; set only by `fold`); never on issue nodes |
 | `next` | no | bool | the item to take up next (D33); feature/function/task/issue only |
@@ -53,5 +54,5 @@ decision on approval: it stays as a node with `wip_status: FOLDED`, linked by th
 
 ## Invariants enforced by the skill (R1), not expressible in JSON Schema
 key == id · every edge target exists · no self-edges · `part_of` acyclic · `resolves` decision→issue (target `issue_status: resolved`) ·
-`supersedes` decision→decision · `source_ref` matches a registry pattern when registries exist ·
+`supersedes` / `refines` decision→decision · `source_ref` matches a registry pattern when registries exist ·
 non-component `code_targets` under some component's roots.

@@ -77,7 +77,7 @@ The skill files themselves stay in the plugin cache.
 structure. Root holds only `current_node`, `nodes`, `config`.
 
 **Edges**: `part_of` (child → parent, at most one), `depends_on`, `affects`, `resolves` (decision → issue),
-`supersedes` (decision → decision).
+`supersedes` (decision → decision it replaces), `refines` (decision → decision it narrows; the target stays in force).
 
 **Registry linkage**: decision / issue nodes carry `source_ref` (e.g. `D-022`, `TBD-24`); `config.registries`
 says how such ids are recognised and which file holds their text.
