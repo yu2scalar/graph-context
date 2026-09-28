@@ -120,8 +120,8 @@ Plugin skills are always namespaced (Claude Code rule); the plugin is named `gra
 `/graph:hydrate <node_id>`, `/graph:handover`, `/graph:compact` (D16, D21, D23).
 Invoking this protocol skill directly with a sub-command word (`/graph:protocol hydrate x`) is equivalent.
 In prose below, `/graph:<name>` is abbreviated to `/<name>` where unambiguous. Natural-language
-equivalents ("rebuild the dependency graph", "hydrate the commit-protocol node", "write the handover",
-"compact the decisions") map to the same commands.
+equivalents ("rebuild the dependency graph", "hydrate the commit-protocol node", "pause here" / "end the session" /
+"hand over", "compact the decisions") map to the same commands.
 
 ---
 
@@ -178,7 +178,10 @@ uninstalled, so the skill never writes memory (R6).
 
 ## `/graph:init [--reconfigure] [--reset-structure]`
 
-Purpose: create or refresh `dependency_graph.json`. Idempotent (F8).
+Purpose: create or refresh `dependency_graph.json` and its entity files. Idempotent (F8).
+Every change is made with `graph_tool.py` commands (R12): nothing is typed into the JSON or into `docs/entities/`.
+Because each command writes at once, **the approval comes before the commands**: collect the proposal (config values,
+nodes, edges, issue states), show it in the interaction language, and run the commands only after the user approves.
 
 ### Step 0 — project analysis and configuration Q&A
 Run when `config` is incomplete or `--reconfigure` is given.
@@ -192,6 +195,9 @@ Run when `config` is incomplete or `--reconfigure` is given.
      `^TBD-\d{2}$`) and show three sample ids per registry as evidence.
    - `interaction_language`: infer from `CLAUDE.md` and recent user messages; confirm.
    - `growth_threshold`: default 5; state that it can be changed later and the graph rebuilt.
+   - `views`: recommend `docs/views/decisions.md`, `docs/views/issues.md`, `docs/views/current.md`,
+     `docs/views/plans.md` (kinds `decisions`, `issues`, `current`, `plans`); add `public-decisions` only when a
+     decision register is shipped to readers outside the project.
    - **components**: top-level directories that contain build files or sources, excluding `build/`,
      `.gradle/`, `.idea/`, `node_modules/`, `target/`, `dist/`, `.git/`, docs folders. Propose one
      `component` node each with `code_targets` = that directory; the primary source tree (e.g. `src/`)
@@ -200,7 +206,9 @@ Run when `config` is incomplete or `--reconfigure` is given.
      Scope note (D17): component detection is a *listing of top-level directory names* only. It never
      reads source files. The "no blind source walk" rule (S3) governs how `code_targets` are derived in
      Step 2 (from paths referenced by design documents), not this listing.
-2. Persist answers to `config` and create the component nodes.
+2. Persist the answers with `config set <key> <json>` (one call per key, e.g.
+   `config set views '[{"kind": "decisions", "path": "docs/views/decisions.md"}]'`) and create each component with
+   `add-node <id> component "<name>" --code <dir>/ --summary "<one line>"`.
 
 ### Step 1 — load and preserve
 If the graph exists, validate it (R1). Preserve `current_node`, `wip_status`, `part_of`, `config`
@@ -208,7 +216,8 @@ unless `--reset-structure` (which discards `part_of` and re-proposes splits/fold
 current `growth_threshold`). Never drop a node because a scan did not rediscover it; report it instead.
 
 ### Step 2 — derive structure from design docs (R5)
-For each document in `docs_scope`:
+For each document in `docs_scope` (each node is created with
+`add-node <id> feature|function "<name>" --part-of <parent> --doc <path> --code <path> … --summary "<one line>"`):
 - One `feature` node per design document, `part_of` the component whose `code_targets` its referenced
   code falls under (ask if ambiguous; an index/overview document becomes `docs` of the component instead
   of a feature).
@@ -218,13 +227,23 @@ For each document in `docs_scope`:
   `code_targets`; each must fall under some component's roots, otherwise report it as unplaced.
 - Never generate `task` nodes.
 
-### Step 3 — decisions and issues (R5, OP1 = C)
+### Step 3 — decisions and issues (R5, OP1 = C, D28, D35)
 Scan the documents in scope and the registry files for ids matching `config.registries[].id_pattern`.
 Create a `decision` / `issue` node **only** when the id is referenced from a document in scope or from the
-registry text of another referenced id. Set `source_ref` verbatim; `docs` = the registry file; `part_of`
-= the feature/function/component whose document referenced it (component when cross-cutting).
+registry text of another referenced id, with
+`add-node <id> decision|issue "<name>" --part-of <node> --source-ref <ID> --doc <registry file>`: the entity file
+gets the registry row verbatim (Statement / Text, Primary source / Source, Copies, quoted 「…」 words), the same way
+`migrate` fills it; a ref without a registry row is refused. `part_of` = the feature/function/component whose
+document referenced it (component when cross-cutting). A registry that is only a draft list, or a fact that has no
+registry row, goes in with `add <id> <type> "<name>" --section 'Heading=text' …` (search before add, P4).
+Then record the state the registry text states, proposed in one table and confirmed by the user:
+- decision `wip_status` (`set-status`): `DONE` when implemented or nothing to implement, `PLANNED` when decided but
+  not yet implemented, `IN_PROGRESS` when partly done;
+- issue state: closed ones with `close <id> resolved|transferred --by <decision id | commit | text>`; every open one
+  with `set-issue <id> --owner user|claude --trigger "<when it is taken up>"` (the gate requires both, D30).
 
 ### Step 4 — edges
+Each edge with `add-edge <src> <kind> <dst>`.
 - `affects`: decision/issue → the nodes whose documents reference it.
 - `resolves`: from registry text such as "resolves TBD-24", "closes", "決定により解消", or a TBD entry that
   names the D-id that closed it.
@@ -235,10 +254,11 @@ registry text of another referenced id. Set `source_ref` verbatim; `docs` = the 
   the **providing** component if it does not exist (never under the requesting one).
 - Every edge target must exist; create stubs rather than dangling edges.
 
-### Step 5 — validate, diff, write, report
-Run `graph_tool.py validate` (R1 + schema). Show a before/after diff (nodes added / updated / removed / merged; edges added) in the interaction
-language and ask before writing. Write with 2-space indentation, key order `$schema`, `current_node`,
-`nodes`, `config`. Report nodes not rediscovered and code paths not placed under any component.
+### Step 5 — validate, render, report
+Run `graph_tool.py validate` (R1 + schema; every write already validated itself) and `render` (the views). Report
+what was created (nodes by type, edges, entity files, views), nodes not rediscovered, code paths not placed under any
+component, and the `check` output (content layer: registry ids without a node). On a refresh, the proposal shown
+before the commands is the diff (nodes added / updated / not rediscovered; edges added).
 
 ---
 
@@ -254,14 +274,17 @@ Purpose: load the full 1-hop / 2-hop neighbourhood and produce the Impact Assess
    output verbatim; then do the human part: read every `exists` file it listed (the tool reports `exists` /
    `MISSING`; "read" is your act, not the tool's), judge the re-examine rows, decide whether any "existing
    capabilities" candidate (name / path overlap, computed by the tool) actually covers the task, and tick the boxes.
-   The "Constraints inherited" bullets carry `source_ref` + node name; the verbatim registry text is what you read
-   in the `registry entry` rows of Files loaded. Steps 1–6 describe what the tool computes; do not recompute them (R9).
+   Files loaded lists each node's **entity file first** (`entity (the node's text)`): read those before anything
+   else — they hold the decisions, issues, plans and the state of work in progress (D36). A row marked
+   `CHANGED OUTSIDE graph_tool` means the file was edited by hand; stop and report it. Steps 1–6 describe what the tool
+   computes; do not recompute them (R9).
 1. Resolve `<node_id>`; if absent, list the closest ids and stop. Do not guess.
 2. Subgraph: hop 0 = the node; hop 1 = every target and every source of any edge kind
    (`part_of` both directions, `depends_on`, `affects`, `resolves`, `supersedes`, `refines`); hop 2 = same expansion
    from hop 1. Record hop distance and the edge path.
-3. Read every `docs` and `code_targets` path of every node in hops 0–2 in full (ranges for large files).
-   For `decision`/`issue` nodes, read the `source_ref` entry in the registry file. Note missing paths.
+3. Read every entity file, then every `docs` and `code_targets` path of every node in hops 0–2 in full (ranges for
+   large files). A `decision` / `issue` node without an entity file (a graph not yet migrated) is read from its
+   `source_ref` row in the registry file. Note missing paths.
 4. Set `current_node` = `<node_id>`.
 5. Staleness (F10 + D24). Two layers:
    - **Timestamp layer**: for each node in the subgraph, compare the newest git commit touching any
@@ -299,8 +322,8 @@ Filter line + excluded counts per component; WARNING when nothing carries `next`
 |-----|----|------|------------|------------------|
 
 ### Files loaded
-| node | kind | path | status (read / MISSING) |
-|------|------|------|--------------------------|
+| node | kind (entity / docs / code_targets) | path | status (exists / MISSING / CHANGED OUTSIDE graph_tool) |
+|------|------------------------------------|------|--------------------------------------------------------|
 
 ### Constraints inherited from decisions
 - <one bullet per visible decision in hops 0–2: source_ref and its Statement; folded decisions and resolved issues are hidden and
@@ -308,7 +331,7 @@ Filter line + excluded counts per component; WARNING when nothing carries `next`
 
 ### Decisions to re-examine
 For each decision D in hops 0–1: affects(D) ∪ resolves(D) ∪ decisions that supersede / are superseded by D
-∪ decisions attached (part_of) to the same feature/function.
+∪ decisions that refine / are refined by D ∪ decisions attached (part_of) to the same feature/function.
 | decision | why it may drift | related |
 |----------|------------------|---------|
 

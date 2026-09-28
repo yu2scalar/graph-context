@@ -31,7 +31,7 @@
 | `add-edge <src> <kind> <dst>` | yes | add one edge (`part_of`, `depends_on`, `affects`, `resolves`, `supersedes`, `refines`), then validate |
 | `remove-edge <src> <kind> <dst>` | yes | remove one edge, then validate (e.g. a `supersedes` that only meant `refines`, u46) |
 | `set-current <node\|null>` | yes | set `current_node`, then validate |
-| `add-node <id> <type> "<name>" [--part-of P] [--doc F]… [--code F]… [--source-ref ID] [--status S] [--next] [--owner O] [--trigger T]` | yes | create a node **and its entity file** (`--summary` text or "(not recorded in the source)"; issue nodes start with `issue_status: open`; `--owner`/`--trigger` issue only), then validate |
+| `add-node <id> <type> "<name>" [--part-of P] [--doc F]… [--code F]… [--source-ref ID] [--status S] [--next] [--owner O] [--trigger T]` | yes | create a node **and its entity file** (decision / issue with `--source-ref`: sections copied verbatim from the matching registry row, as `migrate` does, and refused when no registry row exists — u49; otherwise `--summary` text or "(not recorded in the source)"; issue nodes start with `issue_status: open`; `--owner`/`--trigger` issue only), then validate |
 | `lint-prose` | no | version strings and `Dx–Dy` ranges in SKILL.md, README, references, delegates vs plugin.json and the decision register (marketplace.json is scanned but carries no version); lists every string checked (U15). Not covered: prose naming sub-commands/features |
 | `add-doc <node> <path>` / `add-code <node> <path>` | yes | append to `docs` / `code_targets`, then validate |
 | `hydrate --dry-run <node>` | no | full checklist without writing `current_node` (for reviews) |

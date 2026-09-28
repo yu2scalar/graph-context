@@ -839,7 +839,13 @@ def cmd_add_node(g, args):
     if not os.path.exists(path):
         heads = HEADINGS.get(args.type, ["Summary"])
         sec = {h: NOT_RECORDED for h in heads}
-        if getattr(args, "summary", None): sec["Summary" if "Summary" in heads else heads[0]] = args.summary
+        if args.type in ("decision", "issue") and args.source_ref:  # u49: registry-backed node — text copied verbatim, as migrate does
+            reg, differ = migrate_sections(g, args.id, scan_rows(g))
+            if reg.get("Source" if args.type == "issue" else "Primary source") == NOT_RECORDED:
+                del ns[args.id]; print(f"ERROR: no registry row for `{args.source_ref}` in config.registries files — add the row first, or use `add` without --source-ref"); return 1
+            sec.update(reg)
+            if differ: print(f"note: copies of {args.source_ref} differ ({', '.join(differ)}) — review, then `append {args.id}`")
+        elif getattr(args, "summary", None): sec["Summary" if "Summary" in heads else heads[0]] = args.summary
         os.makedirs(ENTITY_DIR, exist_ok=True)
         open(path, "w", encoding="utf-8").write(render_entity(args.id, args.type, args.name, sec, now_iso(), how="add-node"))
         n["file"] = path; n["sha256"] = sha256_of(path)

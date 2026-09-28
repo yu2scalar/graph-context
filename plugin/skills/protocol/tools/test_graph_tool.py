@@ -56,6 +56,16 @@ def main():
         with _cl.redirect_stdout(_io.StringIO()): rc = gt.cmd_remove_edge(gt.load(p), RE)
         g_r = gt.load(p); assert rc == 0 and "supersedes" not in g_r["nodes"]["d-004x"]
         del g_r["nodes"]["d-003x"], g_r["nodes"]["d-004x"]; gt.save(p, g_r)
+        # u49: add-node --source-ref copies the registry row verbatim (like migrate); an unknown ref writes nothing
+        open("docs/log.md", "a").write("| D-007 | seven, from the register 「quoted」 |\n")
+        class AN: graph = p; id = "d-007"; type = "decision"; name = "seven"; part_of = "f"; doc = None; code = None; source_ref = "D-007"; status = None; next = False; owner = None; trigger = None; summary = None; lang = "en"
+        with _cl.redirect_stdout(_io.StringIO()): rc = gt.cmd_add_node(gt.load(p), AN)
+        sec7 = gt.entity_sections("docs/entities/d-007.md")
+        assert rc == 0 and sec7["Statement"] == "| D-007 | seven, from the register 「quoted」 |" and sec7["User's words"] == "「quoted」" and "docs/log.md:" in sec7["Primary source"], sec7
+        AN.id = "d-008"; AN.source_ref = "D-008"; b_ = _io.StringIO()
+        with _cl.redirect_stdout(b_): rc = gt.cmd_add_node(gt.load(p), AN)
+        assert rc == 1 and "no registry row" in b_.getvalue() and "d-008" not in gt.load(p)["nodes"] and not os.path.exists("docs/entities/d-008.md"), b_.getvalue()
+        g7 = gt.load(p); del g7["nodes"]["d-007"]; gt.save(p, g7); os.remove("docs/entities/d-007.md")
         # u48: hydrate of the current node writes nothing (graph bytes and log unchanged)
         HD.dry_run = False; HD.history = False
         with _cl.redirect_stdout(_io.StringIO()): gt.cmd_hydrate(gt.load(p), HD)
