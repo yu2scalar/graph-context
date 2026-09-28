@@ -11,7 +11,6 @@
 | `gate` | no | completion gate (D30): FAIL (exit 1) on an uncommitted tree (untracked files included), `current_node` unset or missing while PLANNED / IN_PROGRESS / BLOCKED nodes exist, an open issue without owner + trigger, no `next` while work is pending, validate errors (incl. view drift), content-layer errors; WARN only for commits in the link set (unpushed `@{u}..HEAD`, else the last 20) that name no node / registry id. Writes nothing, logs nothing |
 | `hydrate <node_id>` | `current_node` (nothing when unchanged, u48) | full Impact Assessment Checklist for the node (hops 0–2 over all edge kinds, both directions) |
 | `check` | no | growth candidates, fold candidates, staleness (timestamp + D24 content layer), proposals (`--lang ja`) |
-| `handover-tables` | no | Markdown for handover §2, §6 lines, §7 table — paste verbatim (D25) |
 | `fold <victim> <survivor>` | yes | fold a superseded decision into the survivor: the victim is kept as a hidden history node (`wip_status: FOLDED`, survivor `supersedes` it); resolved issues need no fold (hidden by status) |
 | `hydrate --history <node>` | current_node | hydrate including hidden history (folded decisions, resolved issues) |
 | `migrate --restore-folds` | yes | legacy graphs: bring back every node an old delete-fold removed, from the survivor's Folded copies, as hidden history; drop `folded[]` |
@@ -32,15 +31,9 @@
 | `add-edge <src> <kind> <dst>` | yes | add one edge, then validate |
 | `set-current <node\|null>` | yes | set `current_node`, then validate |
 | `add-node <id> <type> "<name>" [--part-of P] [--doc F]… [--code F]… [--source-ref ID] [--status S] [--next] [--owner O] [--trigger T]` | yes | create a node **and its entity file** (`--summary` text or "(not recorded in the source)"; issue nodes start with `issue_status: open`; `--owner`/`--trigger` issue only), then validate |
-| `handover-tables --verify <handover.md>` | no | compare the pasted §2 / §6 / §7 blocks and the footer md5 with current output; `RESULT: OK` or the differing rows (U14) |
 | `lint-prose` | no | version strings and `Dx–Dy` ranges in SKILL.md, README, references, delegates vs plugin.json and the decision register (marketplace.json is scanned but carries no version); lists every string checked (U15). Not covered: prose naming sub-commands/features |
-| `lint-handover <handover.md> [--prev <previous.md>]` | no | with `--prev`: every U-id in the previous §4 must still be a row or be named as resolved/transferred; plus free-text cross-checks: §1 states current_node and mentions commits since the footer HEAD, §5 names current_node, §4 resolved ids have no remaining row, exactly one footer, tool-stamped `Generated:` header, no empty action on flagged §7 rows, warns on empty `why it matters` |
 | `add-doc <node> <path>` / `add-code <node> <path>` | yes | append to `docs` / `code_targets`, then validate |
 | `hydrate --dry-run <node>` | no | full checklist without writing `current_node` (for reviews) |
-
-`--verify` semantics: differing §2/§6 rows or a footer md5 mismatch → `MISMATCH` (exit 1). §7-only differences while the
-graph md5 is unchanged → `WARN` with a diagnosis (HEAD moved, or a docs/code path was edited after generation): regenerate §7
-as the very last step. A hand-typed `Generated:` header → `WARN`.
 
 `--lang ja|en` may be given before or after the sub-command; the default is `config.interaction_language`.
 Every write is validated **before** it is saved; an invalid write is refused and nothing is written (U31). Every write appends a line to `.context/graph_tool.log` (fixed path since D30; `migrate --drop-handover-path` removes the retired `config.handover_path` and moves the log).
@@ -50,5 +43,5 @@ Timestamps are seconds-precision and compared as datetimes (git commit time for 
 
 Dependencies: Python 3.8+, standard library. `jsonschema` is optional (schema layer is skipped with a warning).
 Test: `python3 test_graph_tool.py` (synthetic graph; exercises validate, hops, growth, fold, split, content layer, add-node,
-add-doc, set-status, handover-tables --verify OK/FAIL, lint-handover, hydrate --dry-run, backlog filter + excluded counts, set-next,
+add-doc, set-status, gate (test_gate), hydrate --dry-run, backlog filter + excluded counts, set-next,
 set-issue, close by decision / by action, the resolves → issue_status invariant).

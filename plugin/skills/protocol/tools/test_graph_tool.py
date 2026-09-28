@@ -59,25 +59,11 @@ def main():
         class C: graph = p; id = "g"; type = "feature"; name = "G"; part_of = "core"; doc = None; code = None; source_ref = None; status = "IN_PROGRESS"; lang = "en"
         rc = gt.cmd_add_node(gt.load(p), C); g4 = gt.load(p)
         assert rc == 0 and g4["nodes"]["g"]["part_of"] == ["core"]
-        # handover-tables --verify: OK on a fresh paste, FAIL after a graph change
         import io, contextlib
         g5 = gt.load(p); g5["current_node"] = "f"; gt.save(p, g5)
-        class H: graph = p; verify = None; lang = "en"
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf): gt.cmd_handover_tables(gt.load(p), H)
-        out = buf.getvalue()
-        ho = os.path.join(tmp, "HANDOVER.md")
-        open(ho, "w").write("# x\n## 2. Components and Subgraph Context Range\n" + out.split("<!-- §6 lines -->")[0] + "Files read outside the subgraph\n## 3. Hard Decisions Log\n## 6. Decision Drift\n" + out.split("<!-- §6 lines -->")[1].split("<!-- §7 table -->")[0] + "## 7. Staleness\n" + out.split("<!-- §7 table -->")[1] + f"\n<!-- graph_tool handover-tables @{gt.git_head()} graph md5 {gt.md5(p)} (unchanged) -->\n")
-        class VOK: graph = p; verify = ho; lang = "en"
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf): rc = gt.cmd_handover_tables(gt.load(p), VOK)
-        assert rc == 0, buf.getvalue()
         class S2: graph = p; node = "g"; status = "DONE"; lang = "en"
         with contextlib.redirect_stdout(io.StringIO()): gt.cmd_set_status(gt.load(p), S2)
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf): rc = gt.cmd_handover_tables(gt.load(p), VOK)
-        assert rc == 1 and "md5" in buf.getvalue(), buf.getvalue()
-        # add-doc + dry-run hydrate + lint-handover
+        # add-doc + dry-run hydrate
         class AD: graph = p; cmd = "add-doc"; node = "g"; path = "docs/log.md"; lang = "en"
         with contextlib.redirect_stdout(io.StringIO()): rc = gt.cmd_add_path(gt.load(p), AD)
         assert rc == 0 and "docs/log.md" in gt.load(p)["nodes"]["g"]["docs"]
@@ -85,17 +71,6 @@ def main():
         class DR: graph = p; node = "g"; dry_run = True; lang = "en"
         with contextlib.redirect_stdout(io.StringIO()): gt.cmd_hydrate(gt.load(p), DR)
         assert gt.md5(p) == before, "dry-run must not write"
-        g6 = gt.load(p); cur = g6["current_node"]
-        good = f"# h\nGenerated: x by graph_tool @y\n## 1. A\n- current_node: `{cur}`\n## 4. U\nResolved and removed: U1\n| # |\n|---|\n| U2 |\n## 5. R\n1. `/graph:hydrate {cur}`\n## 7. S\n<!-- graph_tool handover-tables @{gt.git_head()} graph md5 {gt.md5(p)} (unchanged) -->\n"
-        hp = os.path.join(tmp, "H2.md"); open(hp, "w").write(good)
-        class LH: graph = p; handover = hp; lang = "en"
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf): rc = gt.cmd_lint_handover(gt.load(p), LH)
-        assert rc == 0, buf.getvalue()
-        open(hp, "w").write(good.replace(f"- current_node: `{cur}`", "- current_node: `zzz`").replace("| U2 |", "| U1 |"))
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf): rc = gt.cmd_lint_handover(gt.load(p), LH)
-        assert rc == 1 and "U1" in buf.getvalue(), buf.getvalue()
         # D33: backlog, set-next, set-issue, close
         q = lambda **kw: type("A", (), dict(graph=p, lang="en", **kw))
         def _run(fn, a):

@@ -28,7 +28,7 @@ holds content; it holds references to where the content lives and the relations 
 | `${CLAUDE_SKILL_DIR}/schema/graph_schema.json` | JSON Schema, draft 2020-12. Authoritative for shapes. Shipped in the plugin, never copied into the project. |
 | `${CLAUDE_SKILL_DIR}/templates/graph_context.template.json` | Minimal valid seed graph. |
 | `${CLAUDE_SKILL_DIR}/references/` | Full data model, public decision register, sync notes. |
-| `${CLAUDE_SKILL_DIR}/tools/graph_tool.py` | **The executable protocol (D26).** Read-only: `validate`, `check`, `handover-tables [--verify F]`, `lint-prose`, `lint-handover F`, `hydrate --dry-run`. Writing: `hydrate <node>` (current_node), `fold`, `split`, `set-status`, `add-edge`, `set-current`, `add-node`, `add-doc`, `add-code`. Every number, id, hop, path status and timestamp shown to the user comes from this tool (R9). Full list: `tools/README.md`. |
+| `${CLAUDE_SKILL_DIR}/tools/graph_tool.py` | **The executable protocol (D26).** Read-only: `validate`, `gate`, `check`, `lint-prose`, `hydrate --dry-run`. Writing: `hydrate <node>` (current_node), `fold`, `split`, `set-status`, `add-edge`, `set-current`, `add-node`, `add-doc`, `add-code`. Every number, id, hop, path status and timestamp shown to the user comes from this tool (R9). Full list: `tools/README.md`. |
 | `${CLAUDE_PLUGIN_ROOT}/skills/{install,uninstall,init,hydrate,handover,compact}/SKILL.md` | Six thin delegating skills → `/graph:<name>` (D16, D21). Each reads this file and executes the matching section. |
 | `.context/graph_tool.log` | Operations log: one line per accepted write (graph md5 before → after). Fixed path since D30 (`config.handover_path` retired; `migrate --drop-handover-path`). |
 
@@ -175,8 +175,6 @@ Run when `config` is incomplete or `--reconfigure` is given.
    - `registries`: files matching `decision-log*`, `adr*`, `decisions*` → type decision; `tbd*`, `issues*`,
      `open-questions*` → type issue. Derive `id_pattern` from ids actually present (e.g. `^D-\d{3}$`,
      `^TBD-\d{2}$`) and show three sample ids per registry as evidence.
-   - `handover_path`: if the repo already commits handover documents under a docs folder, recommend
-     `<that folder>/WIP_HANDOVER.md` (tracked); otherwise `.context/WIP_HANDOVER.md` (ignored).
    - `interaction_language`: infer from `CLAUDE.md` and recent user messages; confirm.
    - `growth_threshold`: default 5; state that it can be changed later and the graph rebuilt.
    - **components**: top-level directories that contain build files or sources, excluding `build/`,
@@ -326,26 +324,16 @@ Only after every box can be ticked may code modification begin.
 
 ## `/graph:handover`
 
-Purpose: persist the exact state of work so a fresh session resumes with zero re-discovery.
+Purpose: the **completion gate** (D30). No handover document is written: `current_node` is the handover and the
+successor's `/graph:hydrate <current_node>` output is the view. A pause is complete when `graph_tool.py gate` prints
+`RESULT: OK`; until then it is not.
 
-0. **Tool sequence, in this order** (the tables must be generated *after* the graph is final):
-   (i) graph updates via the tool — `set-status`, `add-edge`, `set-current`, `add-node`, `add-doc`, `add-code`
-   (no hand edit of the JSON in the normal flow; if one is ever needed, run `validate` right after) →
-   (ii) `check` (growth / fold / staleness; proposals in the interaction language) → (iii) approved proposals via
-   `fold <victim> <survivor>` / `split <node> <child>=<ids>` → (iv) `validate` → (v) `handover-tables`, pasted verbatim
-   into §2, §6, §7 (D25) → (vi) `handover-tables --verify <handover file>` must print `RESULT: OK` before the handover
-   is declared written (U14: it compares the pasted blocks and the footer md5 with the current graph) →
-   (vii) `lint-handover <handover file>` must print `RESULT: OK` (free-text cross-checks: §1 states current_node and
-   mentions every commit since the footer HEAD, §5 names current_node, §4 lists no resolved id that still has a row, one
-   footer, header stamped by the tool, no empty action on a flagged §7 row) → (viii) `lint-prose` whenever skill prose
-   was edited this session (U15). **Generation is the last step**: any commit *or any edit of a docs / code path* after (v) moves
-   timestamps and (vi) will report drift (as WARN with a diagnosis when the graph md5 is unchanged). Before regenerating,
-   copy the previous handover to `<handover>.prev.md` and run `lint-handover --prev` so no U-id disappears silently. Every write appends to `graph_tool.log` (with graph md5 before → after) next to the handover file;
-   `handover-tables` prints that log as the session history for §6. The header `Generated:` line is copied from the
-   stamp `handover-tables` prints, never typed. Free text (§1, §3, §4, §5, the "why it matters" / "note" / "action"
-   columns) is written by hand, from the session.
-1. **Update the graph**: `current_node` (or null if complete); `wip_status` of touched nodes; new edges,
-   nodes, `docs`, `code_targets` discovered this session; validate (R1) with `graph_tool.py validate`.
+1. **Update the graph through the tool** (no hand edit of the JSON): `wip_status` of touched nodes (`set-status`); new
+   nodes, edges, `docs`, `code_targets` found this session (`add` / `add-node`, `add-edge`, `add-doc`, `add-code`);
+   `current_node` = where the next session starts (`set-current`; null only when nothing is PLANNED / IN_PROGRESS /
+   BLOCKED); the `next` flag on the next item (`set-next`). Work-in-progress state goes onto nodes, never into prose
+   elsewhere: what is done and the exact next edit into the node's entity (`append <node>`), anything unresolved as an
+   issue with owner and trigger (`add <id> issue … --owner --trigger`, or `set-issue`).
 2. **Growth check (F2')**: for each feature/function in the subgraph, propose a split when
    (a) attached decision+issue nodes ≥ `config.growth_threshold` — computed by `check`; or (b) a decision's scope covers
    only part of the node's `code_targets`, or (c) its design document gained ≥ 2 top-level sections describing separate
@@ -357,73 +345,15 @@ Purpose: persist the exact state of work so a fresh session resumes with zero re
    Folded decisions are hidden from hydrate by default (history count; `--history` shows them). Resolved issues need no
    fold — they are hidden by `issue_status: resolved`; transferred issues stay visible. Nothing is deleted.
 4. **Staleness (F10 + D24)** as in hydrate step 5 (both layers), over the touched nodes.
-5. **Write the handover** to `config.handover_path` (create the directory if needed; overwrite; the graph is
-   the durable history, the handover is the live pointer) using the template below.
-   **Generated, not hand-written (D25)**: the Components table and the Subgraph table of §2, the node counts and
-   the growth / fold result lines of §6, and the timestamp columns of §7 are derived mechanically from
-   `dependency_graph.json` (same hop algorithm as hydrate step 2, all edge kinds both directions). The writer
-   may fill only the free-text columns ("why it matters", "note", "action"). Never retype ids, hop numbers, counts
-   or timestamps by hand; if a row is added manually it must be marked `(manual)`.
-6. **Fidelity (R3)**: preserve verbatim every explicit technical decision and its reason, every identifier
-   chosen or renamed (variable, function, class, file, config key, schema field, enum value, CLI flag), and
-   every edge discussed but not resolved. Name the option chosen and the options rejected. Never write
-   "refactored X" or "various fixes". Empty sections are written as `- none`.
+5. **Fidelity (R3)** in the entity files: every explicit technical decision and its reason, every identifier chosen
+   or renamed (variable, function, class, file, config key, schema field, enum value, CLI flag), the option chosen and
+   the options rejected, the user's words quoted verbatim (`append`). Never "refactored X" or "various fixes".
+6. **Commit** every change (the user pushes).
+7. **Run `graph_tool.py gate`.** On `RESULT: FAIL` fix each FAIL row and run it again; never report the pause as
+   complete while it fails. Report the gate table, every WARN row, and the resume command
+   `/graph:hydrate <current_node>` to the user.
 
 Growth and fold are proposals in the interaction language; they are never applied silently.
-
-### Handover template
-
-```markdown
-# WIP HANDOVER — <project name>
-Generated: <copied verbatim from the `Generated:` stamp line that `handover-tables` prints — ISO time, `by graph_tool @<head>`, graph md5>
-Schema: plugin graph v<version> `schema/graph_schema.json`
-
-## 1. Active Task Pointer
-- current_node: `<node_id>` (`<type>`, wip_status: `<status>`), part_of: `<parent>` → `<component>`
-- Name: <node.name>
-- Goal in one sentence, as stated by the user: "<verbatim>"
-- Work completed this session (file-level):
-  - `<path>`: <what changed>
-- Work NOT yet done:
-  - <item> (if it depends on a file that is untracked / local-only, say so: a fresh session may not have it)
-
-## 2. Components and Subgraph Context Range
-### Components (R7)
-| id | name | roots | overview doc | wip |
-|----|------|-------|--------------|-----|
-### Subgraph (re-hydrate with `/graph:hydrate <current_node>`) — pasted from `handover-tables`
-| hop | id | type | wip_status | path from origin | why it matters |
-|-----|----|------|------------|------------------|----------------|
-Files read outside the subgraph (candidates to add to the graph):
-- `<path>` — <reason>
-
-## 3. Hard Decisions Log
-Legend: `#` = order reached this session (not a registry id). `—` in "Fixed identifiers" = no new identifier introduced. Quote the user verbatim in "Reason"; a paraphrase must be marked as such.
-| # | Decision | Chosen | Rejected alternatives | Reason (as stated) | Fixed identifiers | Registry id (if logged) |
-|---|----------|--------|-----------------------|--------------------|-------------------|-------------------------|
-
-## 4. Unresolved Edges
-Resolved this session and removed from this table: <ids and how, or `- none`>
-| # | From node | To node / file | Kind | What is unresolved | Who or what resolves it (and when / on what trigger) |
-|---|-----------|----------------|------|--------------------|-------------------------|
-
-## 5. Immediate Resume Trigger
-1. Run `/graph:hydrate <current_node>` and confirm the checklist matches section 2.
-2. Open `<path>` at `<symbol or line>`; the next edit is: <precise description>.
-3. Run: `<command>`; expect: <expected output>.
-4. Blocking question for the user, if any: "<verbatim question>"
-
-## 6. Decision Drift
-Decisions changed this session and their re-examine sets (see hydrate "Decisions to re-examine").
-| changed decision | related node | resolved / unresolved | note |
-|------------------|--------------|-----------------------|------|
-Current state (from `handover-tables`): node counts · growth check · fold check.
-Session history (from `handover-tables` → operations log): every fold / split / set-status / add-edge / set-current this session, with accepted / declined noted by hand for proposals that were not applied.
-
-## 7. Staleness
-| node | code last changed | docs last changed | finding | action |
-|------|-------------------|-------------------|---------|--------|
-```
 
 ## `/graph:compact`
 
@@ -438,10 +368,10 @@ Session history (from `handover-tables` → operations log): every fold / split 
 |------|---------|
 | **R1 Cross-reference validation** | Executed by `graph_tool.py validate`; the checks are: `nodes[k].id == k` (fix the key, never the id). Every target of `part_of` / `depends_on` / `affects` / `resolves` / `supersedes` and `current_node` exists. No self-edges. `part_of` ≤ 1 and acyclic. `resolves` only decision → issue, and its target has `issue_status: resolved`; `supersedes` only decision → decision. `source_ref` matches some `config.registries[].id_pattern` when registries are defined. Non-component `code_targets` fall under the union of component `code_targets`. Schema-valid (run `python3 -c "import json,jsonschema;jsonschema.Draft202012Validator(json.load(open('${CLAUDE_SKILL_DIR}/schema/graph_schema.json'))).validate(json.load(open('dependency_graph.json')));print('OK')"` when available; otherwise check manually and say so). Schema self-test: `python3 ${CLAUDE_SKILL_DIR}/schema/fixtures/run_fixtures.py` (positive + negative fixtures; must print all PASS). |
 | **R2 Hydration** | If `dependency_graph.json` exists, never modify code before `/graph:hydrate <node_id>` of the relevant node with every pre-modification check ticked. If the node does not exist, create it first (init refresh or manual addition passing R1). If the user explicitly asks to skip, state the risk in one sentence, log the skip in Unresolved Edges, proceed. |
-| **R3 Handover fidelity** | Sections 1–7 mandatory; verbatim decisions, identifiers, unresolved edges; empty = `- none`. §3 carries its legend; §4 opens with the "Resolved this session" line; every "who resolves" names a trigger or says none (D19). §2 tables, §6 counts/results and §7 timestamps are generated from the graph, never retyped (D25). |
+| **R3 Handover fidelity** | Nothing a successor needs lives outside the graph and its entity files (D30): verbatim decisions and reasons, identifiers chosen or renamed, options rejected and the user's words go into the entity of the node they concern; anything unresolved is an issue node with owner and trigger. |
 | **R4 Interaction language** | Every question, recommendation table, approval request, proposal (split / fold / component) and checklist shown to the user is written in `config.interaction_language` (inferred from CLAUDE.md and the user's messages when unset). Graph contents, handover file, SKILL text stay English. |
 | **R5 Structure follows design docs** | `/graph:init` never generates `task`. Decision / issue nodes exist only when referenced from a document in scope or from registry text of a referenced id. Every decision / issue is attached (`part_of`) to ≥ 1 component / feature / function. |
 | **R6 Footprint** | The skill writes only to: `dependency_graph.json`, `graph_tool.log` and `<handover>.prev.md` (next to the handover file), the file at `config.handover_path`, the marked block in `CLAUDE.md`, the marked block in `.gitignore`. Never design docs, registries, source code, other handover files, `.claude/settings*.json`, or Claude memory. A write outside the footprint is refused and reported. |
-| **R7 Always-visible top layer** | Hydrate output and handover §2 begin with the table of all `component` nodes, regardless of hop distance. |
-| **R9 Numbers come from the tool** | Any id, hop, count, path status, timestamp or candidate list shown in a checklist, proposal or handover must be copied from `graph_tool.py` output, never retyped or recomputed by hand. Keep exactly one tool footer line (`<!-- graph_tool <cmd> @<head> graph md5 … -->`) at the end of the handover, the one printed by the final `handover-tables` run, so the paste can be traced to a graph state; `handover-tables --verify` checks it mechanically. If the tool cannot run (no python3), say so and mark every such value `(manual)`. |
+| **R7 Always-visible top layer** | Hydrate output begins with the table of all `component` nodes, regardless of hop distance. |
+| **R9 Numbers come from the tool** | Any id, hop, count, path status, timestamp or candidate list shown in a checklist or proposal must be copied from `graph_tool.py` output, never retyped or recomputed by hand. A pause is complete only when `graph_tool.py gate` prints `RESULT: OK` (D30). If the tool cannot run (no python3), say so and mark every such value `(manual)`. |
 | **R8 No reinvention** | Before proposing any new feature or function, search `nodes` (name, docs, code_targets) across all components and present matches. Never propose a new component autonomously; that is a user decision. Violations are logged in Unresolved Edges. |
