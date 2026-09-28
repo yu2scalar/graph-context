@@ -5,7 +5,7 @@ description: Graph-based project context management (protocol skill of the `grap
 
 # graph-context
 
-> Status: **v3.3.0-dev.6** (2026-09-28) — the pointer is the handover: entity files, generated views, issues as nodes, completion gate, fold hides. What changed and why: the decision register `references/40-decision-register.md`.
+> Status: **v3.3.0-dev.7** (2026-09-28) — the pointer is the handover: entity files, generated views, issues as nodes, completion gate, fold hides. What changed and why: the decision register `references/40-decision-register.md`.
 > Long-form material (full data model, public decision register D1–D37) lives in `${CLAUDE_SKILL_DIR}/references/`.
 
 ## Purpose
@@ -33,7 +33,7 @@ reaches everything from there. No handover document is written; `/graph:handover
 | `docs/entities/<id>.md` | One entity file per node: the node's text (decisions, issues, plans, rules, summaries of structure nodes). Written by `graph_tool.py` only, append-only (see Store). |
 | every `config.views[].path` | Generated documents people read (decision register, issue register, current specification, plans, public register). Re-rendered on every accepted write; never edited by hand. |
 | `.context/graph_tool.log` | Operations log: one line per accepted write (graph md5 before → after). |
-| `${CLAUDE_SKILL_DIR}/tools/graph_tool.py` | **The executable protocol (D26).** Every write to the store goes through it (R12). Commands by group — read-only: `validate`, `gate`, `check`, `backlog`, `lint-prose`, `hydrate --dry-run`, `config get`, `render --check`; entities: `add`, `append`, `attach`, `rename`, `add-node`; structure and state: `hydrate <node>` (current_node), `set-current`, `set-status`, `set-next`, `set-issue`, `close`, `add-edge`, `remove-edge`, `add-doc`, `add-code`, `fold`, `split`, `config set`, `render`; migration: `migrate [--plans \| --retire-registry F \| --strip-graph-copies \| --restore-folds \| --drop-handover-path]`. Every number, id, hop, path status and timestamp shown to the user comes from this tool (R9). Full reference: `tools/README.md`. |
+| `${CLAUDE_SKILL_DIR}/tools/graph_tool.py` | **The executable protocol (D26).** Every write to the store goes through it (R12). Commands by group — footprint: `install`, `uninstall` (both with `--dry-run`); read-only: `validate`, `gate`, `check`, `backlog`, `lint-prose`, `hydrate --dry-run`, `config get`, `render --check`; entities: `add`, `append`, `attach`, `rename`, `add-node`; structure and state: `hydrate <node>` (current_node), `set-current`, `set-status`, `set-next`, `set-issue`, `close`, `add-edge`, `remove-edge`, `add-doc`, `add-code`, `fold`, `split`, `config set`, `render`; migration: `migrate [--plans \| --retire-registry F \| --strip-graph-copies \| --restore-folds \| --drop-handover-path]`. Every number, id, hop, path status and timestamp shown to the user comes from this tool (R9). Full reference: `tools/README.md`. |
 | `${CLAUDE_SKILL_DIR}/schema/graph_schema.json` | JSON Schema, draft 2020-12. Authoritative for shapes. Shipped in the plugin, never copied into the project. |
 | `${CLAUDE_SKILL_DIR}/templates/graph_context.template.json` | Minimal valid seed graph. |
 | `${CLAUDE_SKILL_DIR}/references/` | Full data model, public decision register, sync notes. |
@@ -129,11 +129,18 @@ equivalents ("rebuild the dependency graph", "hydrate the commit-protocol node",
 
 Purpose: put the skill into a host project with a bounded, reversible footprint (rule R6).
 
-1. Nothing is copied: the skill lives in the plugin cache (`/plugin install graph@graph-context`).
-   Confirm the plugin is loaded (this file is being read from `${CLAUDE_PLUGIN_ROOT}`).
-2. Record sha256 of the target's `CLAUDE.md` and `.gitignore` as they are now (null if absent).
-3. Create `dependency_graph.json` from `${CLAUDE_SKILL_DIR}/templates/graph_context.template.json` if absent.
-4. Append to `CLAUDE.md` (create if absent) exactly one marked block:
+The plugin must be installed for this project first (README: `/plugin install graph@graph-context`, project scope, in
+the project's folder); `${CLAUDE_SKILL_DIR}` and `${CLAUDE_PLUGIN_ROOT}` are expanded only when the command runs as a
+skill of the loaded plugin. Nothing is copied into the project except the footprint below.
+
+1. Run `python3 ${CLAUDE_SKILL_DIR}/tools/graph_tool.py install --dry-run` from the project root. It prints the
+   footprint: `dependency_graph.json` (created from the template if absent), the marked block appended to `CLAUDE.md`
+   and to `.gitignore` (each file created if absent), `.context/graph_tool.log`. Nothing is written.
+2. Show that table and ask the user, in the interaction language, before anything is written.
+3. On approval run `graph_tool.py install`. It records sha256 of `CLAUDE.md` and `.gitignore` as they were
+   (`config.install`, with `installed_at` and `skill_version` from `plugin.json`), seeds the graph, and appends each
+   block with no blank line before it (only a newline when the file lacks a final one) so that uninstall restores the
+   files byte-identical. It is idempotent: a block already present is not appended again. The `CLAUDE.md` block is:
    ```markdown
    <!-- graph-context:begin -->
    ## CRITICAL PROTOCOL (graph-context)
@@ -143,32 +150,23 @@ Purpose: put the skill into a host project with a bounded, reversible footprint 
    - Registry mapping (decision / issue ids → files) = `dependency_graph.json` → `config.registries`.
    <!-- graph-context:end -->
    ```
-5. Append to `.gitignore` (create if absent) exactly one marked block:
-   ```
-   # graph-context:begin
-   .context/
-   # graph-context:end
-   ```
-   `.context/` holds only the operations log `graph_tool.log`; omit the line if the log should be tracked; keep the markers.
-6. Write `config.install` `{installed_at, skill_version, claude_md_sha256_before, gitignore_sha256_before}`; `skill_version` = `version` in `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json`.
-7. Print the footprint (every path created or modified). Ask, in the interaction language, before writing anything.
+   and the `.gitignore` block is `# graph-context:begin` / `.context/` / `# graph-context:end` (`.context/` holds only
+   the operations log).
+4. Next step: `/graph:init`. The template's `interaction_language` (`en`) is a placeholder that init replaces.
 
 ## `/graph:uninstall`
 
-1. Compute the footprint: `dependency_graph.json`, the entity files and generated views the tool wrote
-   (`docs/entities/`, every `config.views[].path`), `.context/graph_tool.log` (and `.context/` if it is otherwise empty),
-   the marked block in `CLAUDE.md`, the marked block in `.gitignore`. A leftover `.context/WIP_HANDOVER.md` from a
-   version before D30 is listed too.
-2. Show the list with a per-path action (delete file / strip block / delete empty dir) and whether the path
-   is git-tracked. Ask for approval.
-3. On approval: delete files and dirs the skill created; strip exactly the text between and including the
-   markers (plus one trailing newline) from `CLAUDE.md` and `.gitignore`; if a file becomes empty and the
-   skill created it, delete it.
-4. Verify: sha256 of `CLAUDE.md` and `.gitignore` now equal `config.install.*_before` (null = file should
-   not exist). Report "restored byte-identical" or list differences (which can only come from user edits
-   outside the markers; those are kept).
-5. Warn once if any removed path was git-tracked so the user can `git rm` in the same commit.
-6. Finally tell the user: the plugin itself is removed with `/plugin uninstall graph@graph-context`
+1. Run `graph_tool.py uninstall --dry-run`. It lists the footprint with the action per path (delete file / strip
+   marked block) and whether git tracks it: `dependency_graph.json`, every node's entity file, every view,
+   `.context/graph_tool.log`, a leftover `.context/WIP_HANDOVER.md` from a version before D30, and the blocks in
+   `CLAUDE.md` and `.gitignore`. Nothing is removed.
+2. Show the list and ask for approval.
+3. On approval run `graph_tool.py uninstall`. It strips exactly the marked blocks (and the newline install added),
+   deletes the listed files and the directories they leave empty, and compares `CLAUDE.md` and `.gitignore` with the
+   `config.install` snapshots: "restored byte-identical", or "differs" (only edits made outside the markers, which are
+   kept). A file that did not exist before install is removed.
+4. If any removed path was tracked by git, tell the user to `git rm` / commit them together.
+5. Finally tell the user: the plugin itself is removed with `/plugin uninstall graph@graph-context`
    (and `/plugin marketplace remove graph-context` if desired); a skill cannot uninstall itself.
 
 Nothing outside the footprint is ever touched. Anything Claude stored in its own memory cannot be
@@ -188,12 +186,12 @@ Run when `config` is incomplete or `--reconfigure` is given.
 
 1. Detect and tabulate, then **recommend and ask** (interaction language):
    - `design_root`: candidates `docs/design/`, `design/`, `docs/`, `doc/`; prefer the one with a README or
-     index and the most cross-references.
+     index, else the one with the most cross-references.
    - `docs_scope`: default `<design_root>/**/*.md`; offer to add plan / handover docs if found.
    - `registries`: files matching `decision-log*`, `adr*`, `decisions*` → type decision; `tbd*`, `issues*`,
      `open-questions*` → type issue. Derive `id_pattern` from ids actually present (e.g. `^D-\d{3}$`,
-     `^TBD-\d{2}$`) and show three sample ids per registry as evidence.
-   - `interaction_language`: infer from `CLAUDE.md` and recent user messages; confirm.
+     `^TBD-\d{2}$`) and show up to three sample ids per registry as evidence.
+   - `interaction_language`: infer from `CLAUDE.md` and recent user messages; confirm (it replaces the template's `en`).
    - `growth_threshold`: default 5; state that it can be changed later and the graph rebuilt.
    - `views`: recommend `docs/views/decisions.md`, `docs/views/issues.md`, `docs/views/current.md`,
      `docs/views/plans.md` (kinds `decisions`, `issues`, `current`, `plans`); add `public-decisions` only when a
@@ -218,7 +216,8 @@ current `growth_threshold`). Never drop a node because a scan did not rediscover
 ### Step 2 — derive structure from design docs (R5)
 For each document in `docs_scope` (each node is created with
 `add-node <id> feature|function "<name>" --part-of <parent> --doc <path> --code <path> … --summary "<one line>"`):
-- One `feature` node per design document, `part_of` the component whose `code_targets` its referenced
+- One `feature` node per design document — registry files (`config.registries[].file`) are not features, and neither are
+  plan documents a project keeps under its own rules — `part_of` the component whose `code_targets` its referenced
   code falls under (ask if ambiguous; an index/overview document becomes `docs` of the component instead
   of a feature).
 - A document with clearly separate top-level sections may yield `function` children; do **not** split on
@@ -230,7 +229,8 @@ For each document in `docs_scope` (each node is created with
 ### Step 3 — decisions and issues (R5, OP1 = C, D28, D35)
 Scan the documents in scope and the registry files for ids matching `config.registries[].id_pattern`.
 Create a `decision` / `issue` node **only** when the id is referenced from a document in scope or from the
-registry text of another referenced id, with
+registry text of another referenced id. The node id is the registry id in lower case (`D-001` → `d-001`,
+`TBD-01` → `tbd-01`); commands accept either form, and `closed_by` stores the registry id. Create each with
 `add-node <id> decision|issue "<name>" --part-of <node> --source-ref <ID> --doc <registry file>`: the entity file
 gets the registry row verbatim (Statement / Text, Primary source / Source, Copies, quoted 「…」 words), the same way
 `migrate` fills it; a ref without a registry row is refused. `part_of` = the feature/function/component whose
@@ -239,14 +239,16 @@ registry row, goes in with `add <id> <type> "<name>" --section 'Heading=text' �
 Then record the state the registry text states, proposed in one table and confirmed by the user:
 - decision `wip_status` (`set-status`): `DONE` when implemented or nothing to implement, `PLANNED` when decided but
   not yet implemented, `IN_PROGRESS` when partly done;
-- issue state: closed ones with `close <id> resolved|transferred --by <decision id | commit | text>`; every open one
+- issue state: closed ones with `close <id> resolved|transferred --by <decision id | commit | text>` (when `--by` names a
+  decision, `close` also adds the `resolves` edge — do not add it again in Step 4); every open one
   with `set-issue <id> --owner user|claude --trigger "<when it is taken up>"` (the gate requires both, D30).
 
 ### Step 4 — edges
-Each edge with `add-edge <src> <kind> <dst>`.
-- `affects`: decision/issue → the nodes whose documents reference it.
+Each edge with `add-edge <src> <kind> <dst>` (an edge that already exists is reported as unchanged and not logged).
+- `affects`: decision/issue → the nodes whose documents reference it **other than its `part_of` node** (`part_of`
+  already says where it is attached; `affects` names the further nodes it constrains or impacts).
 - `resolves`: from registry text such as "resolves TBD-24", "closes", "決定により解消", or a TBD entry that
-  names the D-id that closed it.
+  names the D-id that closed it — already added by `close --by <decision>` in Step 3.
 - `supersedes`: from registry text such as "supersedes D-010", "replaces", "上書き", "置き換え".
 - `refines`: from registry text such as "refines D-010", "narrows", "details", "補足", "詳細化" (the earlier decision stays in force).
 - `depends_on`: from explicit "depends on / requires / after / blocked by / 前提" phrasing; for
@@ -258,7 +260,8 @@ Each edge with `add-edge <src> <kind> <dst>`.
 Run `graph_tool.py validate` (R1 + schema; every write already validated itself) and `render` (the views). Report
 what was created (nodes by type, edges, entity files, views), nodes not rediscovered, code paths not placed under any
 component, and the `check` output (content layer: registry ids without a node). On a refresh, the proposal shown
-before the commands is the diff (nodes added / updated / not rediscovered; edges added).
+before the commands is the diff (nodes added / updated / not rediscovered; edges added). Finally commit the footprint
+(message naming the nodes created, e.g. `graph: init (core, order-flow, d-001, tbd-01)`).
 
 ---
 
@@ -369,8 +372,11 @@ successor's `/graph:hydrate <current_node>` output is the view. A pause is compl
 
 1. **Update the graph through the tool** (no hand edit of the JSON): `wip_status` of touched nodes (`set-status`); new
    nodes, edges, `docs`, `code_targets` found this session (`add` / `add-node`, `add-edge`, `add-doc`, `add-code`);
-   `current_node` = where the next session starts (`set-current`; null only when nothing is PLANNED / IN_PROGRESS /
-   BLOCKED); the `next` flag on the next item (`set-next`). Work-in-progress state goes onto nodes, never into prose
+   `current_node` = the node the next session starts on — the next item to work on, not the one just finished
+   (`set-current`; null only when nothing is PLANNED / IN_PROGRESS / BLOCKED); the `next` flag on that item
+   (`set-next`). `next` cannot be set on a decision: when the pending item is a PLANNED decision, flag the node the
+   decision is `part_of` (the feature or function that implements it) and make that node `current_node`. A feature or
+   function gets a `wip_status` only once work on it is planned (`PLANNED`), started or done; leave it unset otherwise. Work-in-progress state goes onto nodes, never into prose
    elsewhere: what is done and the exact next edit into the node's entity (`append <node>`), anything unresolved as an
    issue with owner and trigger (`add <id> issue … --owner --trigger`, or `set-issue`).
 2. **Growth check (F2')**: for each feature/function in the subgraph, propose a split when
@@ -387,7 +393,8 @@ successor's `/graph:hydrate <current_node>` output is the view. A pause is compl
 5. **Fidelity (R3)** in the entity files: every explicit technical decision and its reason, every identifier chosen
    or renamed (variable, function, class, file, config key, schema field, enum value, CLI flag), the option chosen and
    the options rejected, the user's words quoted verbatim (`append`). Never "refactored X" or "various fixes".
-6. **Commit** every change (the user pushes).
+6. **Commit** every change (the user pushes). Each commit message names the node or registry ids it concerns (the gate
+   warns about commits that name none).
 7. **Run `graph_tool.py gate`.** On `RESULT: FAIL` fix each FAIL row and run it again; never report the pause as
    complete while it fails. Report the gate table, every WARN row, and the resume command
    `/graph:hydrate <current_node>` to the user.
@@ -414,6 +421,6 @@ Growth and fold are proposals in the interaction language; they are never applie
 | **R7 Always-visible top layer** | Hydrate output begins with the table of all `component` nodes, regardless of hop distance. |
 | **R8 No reinvention** | Before proposing any new feature or function, search `nodes` (name, docs, code_targets) across all components and present matches. Never propose a new component autonomously; that is a user decision. Violations are recorded as issue nodes (owner and trigger). |
 | **R9 Numbers come from the tool** | Any id, hop, count, path status, timestamp or candidate list shown in a checklist or proposal must be copied from `graph_tool.py` output, never retyped or recomputed by hand. A pause is complete only when `graph_tool.py gate` prints `RESULT: OK` (D30). If the tool cannot run (no python3), say so and mark every such value `(manual)`. |
-| **R10 Record, then ask** (D34 R-a) | A question to the user is asked only after the node it concerns is written (the question itself `append`ed to that node, or a new issue node), and the question cites the node id. The answer is written to the same node before any work continues, with the user's words verbatim. |
-| **R11 Plans are nodes** (D34 R-b) | A plan is a `plan` entity (`add <id> plan … --section 'Goal=…' --section 'Approval=…'`) attached to what it plans; each not-yet-started step is a `function` node `part_of` the plan with `wip_status: PLANNED`, ordered by `depends_on`; the step in progress carries `next` and is `current_node`. A step is closed with `append` (what was done, commit ids) then `set-status DONE`. Work starts only after the Approval section records the user's approval. |
+| **R10 Record, then ask** (D34 R-a) | Once a graph exists, a question to the user is asked only after the node it concerns is written (the question itself `append`ed to that node, or a new issue node), and the question cites the node id. The answer is written to the same node before any work continues, with the user's words verbatim. Before the graph exists (`/graph:install`, the first `/graph:init`) the proposal table is the question and the commands run on approval are its record (config, entity files, operations log). |
+| **R11 Plans are nodes** (D34 R-b) | A plan is a `plan` entity (`add <id> plan … --section 'Goal=…' --section 'Approval=…'`) attached to what it plans; each not-yet-started step is a `function` node `part_of` the plan with `wip_status: PLANNED`, ordered by `depends_on`; the step in progress carries `next` and is `current_node`. A step is closed with `append` (what was done, commit ids) then `set-status DONE`. Work starts only after the Approval section records the user's approval. A project rule that plans must be written under `docs/` is met by the plan entity in `docs/entities/`; no separate plan file is written. |
 | **R12 Everything through a command** | Every change to the store (graph, entity files, views, config) is made by a `graph_tool.py` command documented here, so that another session or project gets the same result from the same input. No hand edits, no ad-hoc scripts; when an operation has no command, the command is added first (with a test), then used. |

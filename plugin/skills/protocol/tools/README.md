@@ -1,12 +1,14 @@
 # tools/
 
-> Status: v3.3.0-dev.6 (2026-09-28) — the pointer is the handover: entity files, generated views, issues as nodes, completion gate, fold hides. What changed and why: the decision register `references/40-decision-register.md` (protocol skill).
+> Status: v3.3.0-dev.7 (2026-09-28) — the pointer is the handover: entity files, generated views, issues as nodes, completion gate, fold hides. What changed and why: the decision register `references/40-decision-register.md` (protocol skill).
 
 `graph_tool.py` is the executable part of the protocol (D26). Run it from the project root that holds
 `dependency_graph.json`; it resolves the schema relative to its own location.
 
 | command | writes? | what it does |
 |---|---|---|
+| `install [--dry-run]` | yes | seed `dependency_graph.json` from the template, append the `CLAUDE.md` / `.gitignore` marked blocks (no blank line before them; idempotent), record `config.install` sha256 snapshots; runs before a graph exists |
+| `uninstall [--dry-run]` | yes | remove the footprint (graph, entity files, views, log, legacy handover files), strip the blocks, verify `CLAUDE.md` / `.gitignore` byte-identical to the snapshots |
 | `validate` | no | JSON Schema (if `jsonschema` is installed) + every R1 rule; exit 1 on errors |
 | `gate` | no | completion gate (D30): FAIL (exit 1) on an uncommitted tree (untracked files included), `current_node` unset or missing while PLANNED / IN_PROGRESS / BLOCKED nodes exist, an open issue without owner + trigger, no `next` while work is pending, validate errors (incl. view drift), content-layer errors; WARN only for commits in the link set (unpushed `@{u}..HEAD`, else the last 20) that name no node / registry id. Writes nothing, logs nothing |
 | `hydrate <node_id>` | `current_node` (nothing when unchanged, u48) | full Impact Assessment Checklist for the node (hops 0–2 over all edge kinds, both directions) |
@@ -28,7 +30,7 @@
 | `set-next <node> [--off]` | yes | set / clear `next` (not on component / decision), then validate |
 | `set-issue <issue> [--owner user\|claude] [--trigger TEXT]` | yes | set who resolves an issue and when, then validate |
 | `close <issue> <resolved\|transferred> --by <decision\|commit\|text>` | yes | set `issue_status` + `closed_by`; when `--by` names a decision (node id or registry id) also adds `<decision>.resolves -> <issue>`, then validate |
-| `add-edge <src> <kind> <dst>` | yes | add one edge (`part_of`, `depends_on`, `affects`, `resolves`, `supersedes`, `refines`), then validate |
+| `add-edge <src> <kind> <dst>` | yes | add one edge (`part_of`, `depends_on`, `affects`, `resolves`, `supersedes`, `refines`), then validate; an existing edge is reported unchanged and not logged |
 | `remove-edge <src> <kind> <dst>` | yes | remove one edge, then validate (e.g. a `supersedes` that only meant `refines`, u46) |
 | `set-current <node\|null>` | yes | set `current_node`, then validate |
 | `add-node <id> <type> "<name>" [--part-of P] [--doc F]… [--code F]… [--source-ref ID] [--status S] [--next] [--owner O] [--trigger T]` | yes | create a node **and its entity file** (decision / issue with `--source-ref`: sections copied verbatim from the matching registry row, as `migrate` does, and refused when no registry row exists — u49; otherwise `--summary` text or "(not recorded in the source)"; issue nodes start with `issue_status: open`; `--owner`/`--trigger` issue only), then validate |
@@ -37,7 +39,7 @@
 | `hydrate --dry-run <node>` | no | full checklist without writing `current_node` (for reviews) |
 
 `--lang ja|en` may be given before or after the sub-command; the default is `config.interaction_language`.
-Every write is validated **before** it is saved; an invalid write is refused and nothing is written (U31). Every write appends a line to `.context/graph_tool.log` (fixed path since D30; `migrate --drop-handover-path` removes the retired `config.handover_path` and moves the log).
+Every write is validated **before** it is saved; an invalid write is refused and nothing is written (U31). Every write that changes the graph (or, for `render`, a view) appends a line to `.context/graph_tool.log` (fixed path since D30; `migrate --drop-handover-path` removes the retired `config.handover_path` and moves the log).
 Every run ends with a footer `<!-- graph_tool <cmd> @<git head> graph md5 <before>[ -> <after> (WRITTEN)] -->`,
 so a pasted block can be traced to a graph state and read-only commands can be seen not to have written.
 Timestamps are seconds-precision and compared as datetimes (git commit time for tracked paths, mtime otherwise).

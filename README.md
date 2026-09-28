@@ -12,13 +12,13 @@ content): components, design-document structure, decisions, issues, and the rela
 the relevant 1-hop / 2-hop neighbourhood to be loaded before any code change and gates every pause so that
 `current_node` alone is the handover.
 
-Current version: **3.3.0-dev.6** (development pre-release; last release 3.2.0). Plugin name `graph`, marketplace `graph-context` (this repository).
+Current version: **3.3.0-dev.7** (development pre-release; last release 3.2.0). Plugin name `graph`, marketplace `graph-context` (this repository).
 
 ## Commands
 
 | Command | What it does |
 |---------|--------------|
-| `/graph:install` | Seed `dependency_graph.json`, append one marked block each to `CLAUDE.md` and `.gitignore`, snapshot checksums. Nothing else is written to your project. |
+| `/graph:install` | Seed `dependency_graph.json`, append one marked block each to `CLAUDE.md` and `.gitignore`, snapshot checksums (`graph_tool.py install`, shown with `--dry-run` first). Nothing else is written to your project until `/graph:init`. |
 | `/graph:init [--reconfigure] [--reset-structure]` | Analyse the project, recommend and ask for `config` (design root, registries, language, components), derive the graph from design docs and registries. Idempotent; preserves human decisions unless `--reset-structure`. |
 | `/graph:hydrate <node_id>` | Load the node plus 1-hop / 2-hop neighbours over every edge kind, read every referenced file, and emit the Impact Assessment Checklist: components, subgraph, inherited decision constraints, decisions to re-examine, existing capabilities, stale docs, blast radius. Required before modifying code. |
 | `/graph:handover` | Completion gate (D30): record the state on the graph, propose splits (growth) and folds (compaction), run the staleness check, commit, and finish only when `graph_tool.py gate` passes. No handover document: the next session runs `/graph:hydrate <current_node>`. |
@@ -30,15 +30,19 @@ graph contents, entity files and views are English.
 
 ## Install
 
+The plugin is installed **per project, with project scope** — once in each project you want to index, from that
+project's folder:
+
 ```bash
-# At the Claude Code prompt
-/plugin marketplace add yu2scalar/graph-context
-/plugin install graph@graph-context
-/reload-plugins                # or restart the session
+# At the Claude Code prompt, started in the project's folder
+/plugin marketplace add yu2scalar/graph-context   # once per machine
+/plugin install graph@graph-context               # choose the "project" scope when asked
+/reload-plugins                                   # or restart the session
 # commands are now /graph:install, /graph:init, /graph:hydrate <node_id>, /graph:handover, /graph:compact, /graph:uninstall
 ```
 
-Then, inside the project you want to index: `/graph:install` followed by `/graph:init`.
+If `/graph:install` is not offered in a project, the plugin is not installed for that project yet (another project's
+project-scope install does not count). Then, in the project: `/graph:install` followed by `/graph:init`.
 
 ## Update
 
