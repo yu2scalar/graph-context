@@ -44,6 +44,13 @@ def main():
         HD.history = True; b_ = _io.StringIO()
         with _cl.redirect_stdout(b_): gt.cmd_hydrate(gt.load(p), HD)
         assert "d-001" in b_.getvalue(), "--history shows folded nodes"
+        # u48: hydrate of the current node writes nothing (graph bytes and log unchanged)
+        HD.dry_run = False; HD.history = False
+        with _cl.redirect_stdout(_io.StringIO()): gt.cmd_hydrate(gt.load(p), HD)
+        lp = gt.log_path(gt.load(p)); gb, lb = open(p).read(), open(lp).read()
+        b_ = _io.StringIO()
+        with _cl.redirect_stdout(b_): gt.cmd_hydrate(gt.load(p), HD)
+        assert open(p).read() == gb and open(lp).read() == lb and "nothing written" in b_.getvalue(), "re-hydrate of current_node must not write"
         # split via CLI
         class B: graph = p; node = "f"; children = ["f-sub=d-002"]; lang = "en"
         rc = gt.cmd_split(gt.load(p), B); g3 = gt.load(p)

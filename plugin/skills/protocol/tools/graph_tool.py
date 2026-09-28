@@ -697,6 +697,8 @@ def cmd_hydrate(g, args):
         print(f"- [ ] {line}")
     if getattr(args, "dry_run", False):
         print("\n(dry-run: current_node not written)")
+    elif g.get("current_node") == origin:  # u48: a resume must leave a clean tree clean — no graph write, no log line
+        print(f"\n(current_node already `{origin}`: nothing written)")
     else:
         old = g.get("current_node"); b4 = md5(args.graph); g["current_node"] = origin; guarded_save(args.graph, g); log_op(g, f"hydrate {origin} (current_node {old} -> {origin})", args.graph, b4)
         print(f"\n(current_node written: `{origin}`)")
