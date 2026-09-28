@@ -5,7 +5,7 @@ description: Completion gate for pausing or ending work (D30): record the state 
 
 # /graph:handover
 
-> Status: v3.3.0-dev.7 (2026-09-28) — the pointer is the handover: entity files, generated views, issues as nodes, completion gate, fold hides. What changed and why: the decision register `references/40-decision-register.md` (protocol skill).
+> Status: v3.3.0-dev.8 (2026-09-28) — the pointer is the handover: entity files, generated views, issues as nodes, completion gate, fold hides. What changed and why: the decision register `references/40-decision-register.md` (protocol skill).
 
 Thin delegating command. Do not improvise its behaviour here.
 

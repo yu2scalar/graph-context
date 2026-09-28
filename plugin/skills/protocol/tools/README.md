@@ -1,6 +1,6 @@
 # tools/
 
-> Status: v3.3.0-dev.7 (2026-09-28) — the pointer is the handover: entity files, generated views, issues as nodes, completion gate, fold hides. What changed and why: the decision register `references/40-decision-register.md` (protocol skill).
+> Status: v3.3.0-dev.8 (2026-09-28) — the pointer is the handover: entity files, generated views, issues as nodes, completion gate, fold hides. What changed and why: the decision register `references/40-decision-register.md` (protocol skill).
 
 `graph_tool.py` is the executable part of the protocol (D26). Run it from the project root that holds
 `dependency_graph.json`; it resolves the schema relative to its own location.
