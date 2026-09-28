@@ -1,6 +1,6 @@
 # tools/
 
-> Status: v3.3.0-dev.5 (2026-09-28, gate, refines, remove-edge, migrate --drop-handover-path, handover-tables / lint-handover removed; dev.4: fold hides, config, restore-folds; dev.3: append --section, strip-graph-copies; dev.2: D36 entity files, add/append/attach/migrate/render; dev.1: D33: backlog, set-next, set-issue, close, PLANNED; v3.2.0 2026-09-24, D26; revised after peer review: seconds precision, --lang default from config, D24b scoping, scan counts, log, footer, write helpers)
+> Status: v3.3.0-dev.5 (2026-09-28) — the pointer is the handover: entity files, generated views, issues as nodes, completion gate, fold hides. What changed and why: the decision register `references/40-decision-register.md` (protocol skill).
 
 `graph_tool.py` is the executable part of the protocol (D26). Run it from the project root that holds
 `dependency_graph.json`; it resolves the schema relative to its own location.

@@ -5,7 +5,7 @@ description: Graph-based project context management (protocol skill of the `grap
 
 # graph-context
 
-> Status: **v3.3.0-dev.5 (2026-09-28 — completion gate (D30): gate command, no authored handover (handover-tables / lint-handover / template removed), config.handover_path retired (migrate --drop-handover-path, fixed .context/graph_tool.log), refines edge + remove-edge (u46), hydrate no-op when current_node is unchanged (u48); dev.4: fold hides (D31, D37: FOLDED, --history, restore-folds), config command, add-node entity files; dev.3: append --section, strip-graph-copies, decision status = implementation state; dev.2: D36 integrity-first store: entity files, add / append / attach / migrate / render; dev.1: D33 Backlog view, issue_status / PLANNED / next, backlog/set-next/set-issue/close; v3.2.0 2026-09-24 — D26 protocol as code: `tools/graph_tool.py` executes R1, hydrate, check, handover tables, fold, split; rule R9; v3.1.1 = D24/D25; v3.1.0 = plugin `graph`; v3.0.0 = plugin packaging)**
+> Status: **v3.3.0-dev.5** (2026-09-28) — the pointer is the handover: entity files, generated views, issues as nodes, completion gate, fold hides. What changed and why: the decision register `references/40-decision-register.md`.
 > Long-form material (full data model, public decision register D1–D37) lives in `${CLAUDE_SKILL_DIR}/references/`.
 
 ## Purpose
