@@ -44,6 +44,7 @@
 | D39 | A leaf is exactly one class (or the language's file / package unit) and only leaves carry code; features follow design documents; parents with too many children are proposed for regrouping; files no design document references are reported by name as code without a leaf. | refines d38; resolves u53 | decided, not yet implemented |
 | D40 | Node, Edge and Entity file (a node's text) are the defined terms; code is never called an entity. | resolves u54 | decided, not yet implemented |
 | D41 | Node text is the contract (decided before code, not readable from it); existing design documents remain its source and are pointed to by section; entity files fill only what no document states; behaviour sections and classes link many-to-many through anchors. | refines d39; resolves u55 | decided, not yet implemented |
+| D42 | Tests attach to nodes through test_targets: class-named unit tests to the leaf, behaviour tests to the design-document node they verify; seams are checked from the caller's stated expectations; untested leaves, missing expectations and contracts newer than their tests are reported. | refines d41; resolves u56 | decided, not yet implemented |
 | S1 | `dependency_graph.json` lives at the project root | — | active |
 | S2 | v1: single SKILL.md, `/graph-*` as sub-commands | — | folded into D16 |
 | S3 | init scans design docs + referenced code, no blind source walk | — | folded into D17 |
