@@ -46,3 +46,4 @@
 | S3 | init scans design docs + referenced code, no blind source walk | — | folded into D17 |
 | S4 | Skill text and stored artifacts in English | — | active |
 | S5 | Every edge target must exist | — | folded into D18 |
+| d38 | The tree has one system apex (purpose, premises, values) with requirement nodes; components sit under it and are divided by group nodes whose classes and ranks come from the project's own design documents; dependencies against the rank order are warned; non-function documents attach as docs. | resolves u51 | decided, not yet implemented |
