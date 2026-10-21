@@ -47,6 +47,9 @@
 | D41 | Node text is the contract (decided before code, not readable from it); existing design documents remain its source and are pointed to by section; entity files fill only what no document states; behaviour sections and classes link many-to-many through anchors. | refines d39; resolves u55 | in progress |
 | D42 | Tests attach to nodes through test_targets: class-named unit tests to the leaf, behaviour tests to the design-document node they verify; seams are checked from the caller's stated expectations; untested leaves, missing expectations and contracts newer than their tests are reported. | refines d41; resolves u56 | in progress |
 | D43 | Restructuring has its own validated commands (move, group, dissolve); nothing is deleted — a dissolved node stays as hidden history; every restructuring is a proposal applied on approval. | refines d39, d37; resolves u52 | in progress |
+| D44 | init ends with a review plan of its own findings as the next work. | refines d33; resolves u60 | decided, not yet implemented |
+| D45 | revises marks a partial replacement; the earlier decision stays visible and is never folded. | refines d37; resolves u64 | decided, not yet implemented |
+| D46 | Leaves stay in the component of their file; cross-cutting decisions hang on the lowest common ancestor; defaults for ids, stale registry text, triggers and resolves. | refines d39; resolves u63 | decided, not yet implemented |
 | S1 | `dependency_graph.json` lives at the project root | — | active |
 | S2 | v1: single SKILL.md, `/graph-*` as sub-commands | — | folded into D16 |
 | S3 | init scans design docs + referenced code, no blind source walk | — | folded into D17 |
