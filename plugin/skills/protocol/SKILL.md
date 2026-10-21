@@ -6,7 +6,7 @@ description: Graph-based project context management (protocol skill of the `grap
 # graph-context
 
 > Status: **v3.4.0-dev.1** (2026-10-21) — the structure model: system → component → group → feature → leaf (one class), contracts in the design documents, test_targets, move / group / dissolve; on top of: the pointer is the handover, entity files, generated views, issues as nodes, completion gate, fold hides. What changed and why: the decision register `references/40-decision-register.md`.
-> Long-form material (full data model, public decision register D1–D43) lives in `${CLAUDE_PLUGIN_ROOT}/skills/protocol/references/`.
+> Long-form material (full data model, public decision register D1–D46) lives in `${CLAUDE_PLUGIN_ROOT}/skills/protocol/references/`.
 
 ## Purpose
 
@@ -82,7 +82,8 @@ one exists). The kind comes from `config.test_kinds` naming rules; helpers and f
 nodes), `class` (group only). Optional edges:
 `part_of` (≤1, child → parent), `depends_on`, `affects`, `resolves` (decision → issue only),
 `supersedes` (decision → decision it replaces), `refines` (decision → decision it narrows; the target stays in
-force and is never a fold candidate). Optional `source_ref` (registry id, decision/issue only, single-valued),
+force and is never a fold candidate), `revises` (decision → decision it partly replaces; the rest of the target stays
+in force, it stays visible and is never a fold candidate — D45). Optional `source_ref` (registry id, decision/issue only, single-valued),
 `wip_status` (`PLANNED` | `IN_PROGRESS` | `BLOCKED` | `DONE` | `FOLDED`; not on issues), `next` (bool, the item to
 take up next; not on component/decision), `file` + `sha256` (the entity file and its hash as last written by the tool).
 Issue nodes require `issue_status` (`open` | `resolved` | `transferred`) and may carry `owner` (`user` | `claude`) and
@@ -107,6 +108,7 @@ A group / feature / function removed by `dissolve` is also `FOLDED`: kept as hid
 | decision resolves an issue | decision `resolves` issue |
 | decision replaces an earlier decision | decision `supersedes` earlier decision |
 | decision narrows or details an earlier decision that stays in force | decision `refines` earlier decision |
+| decision replaces part of an earlier decision, the rest stays in force | decision `revises` earlier decision |
 | issue was raised by a decision | issue `depends_on` decision |
 
 **`config` keys**
@@ -288,6 +290,15 @@ current `growth_threshold`). Never drop a node because a scan did not rediscover
 ### Step 2 — derive structure from design docs (R5, D38, D39, D41, D42)
 The tree is built top-down: system → component → group → feature → leaf. Show the whole proposed tree (ids, names,
 parents, documents, leaf files) as one table and run the commands after approval.
+- **Evidence from the tool (R9, u62)**: `graph_tool.py refs` lists, per document in scope and per section, the code and
+  test names and paths it mentions, and how many code files no document names (`--json` for a machine-readable list,
+  `--doc <path>` for one document). Build the proposal from that output; never count by hand or with an own script.
+- **Bulk writes (R12, u62)**: write the approved commands to `.context/init-commands.jsonl` (one JSON array of
+  arguments per line, e.g. `["add-node", "router", "function", "Router", "--part-of", "routing", "--code", "src/…/Router.java"]`)
+  and run `graph_tool.py apply .context/init-commands.jsonl`: every command is validated, and when one fails nothing is
+  kept, so fix the line and run the file again. `.context/` is ignored by git; the file is not a project document.
+- **Ids (D46)**: kebab-case of the ASCII words of the name; when a heading has no ASCII words, the file name stem
+  (`common/retry-guide.md` → `retry-guide`); a leaf's id is its class name in kebab-case (`PgWriter` → `pg-writer`).
 - **Groups**: one `group` per class a component's documents use, `add-node <id> group "<name>" --part-of <component>
   --class <class id> --section 'Summary=…' --section 'Criterion=<the criterion quoted from the classification
   document>'`. Nest groups only where the project's documents nest (e.g. the layers the architecture document lists
@@ -308,6 +319,10 @@ parents, documents, leaf files) as one table and run the commands after approval
   with `add-test <feature> <test file>`. Never read a source file to decide anything: names and paths only (S3).
 - A class referenced by several documents is still one leaf: parent = the document that specifies it most (ask when
   even); the other documents are further `--doc` anchors.
+- **A leaf lives in the component of its file (D46)**: when a document of one component names a class whose file is
+  under another component (e.g. a core document naming a settler class), the leaf goes under that other component —
+  under its feature or group when one fits, else directly under the component — and the naming document is a `--doc`
+  anchor of the leaf. `check` warns about a leaf placed outside the component of its file.
 - Every code path must fall under some component's roots, otherwise report it as unplaced.
 - Never generate `task` nodes.
 
@@ -318,16 +333,24 @@ registry files themselves, or from the registry text of another referenced id. T
 `TBD-01` → `tbd-01`); commands accept either form, and `closed_by` stores the registry id. Create each with
 `add-node <id> decision|issue "<name>" --part-of <node> --source-ref <ID> --doc <registry file>` (name = the registry's
 decision / question text, shortened to one line): the entity file
-gets the registry row verbatim (Statement / Text, Primary source / Source, Copies, quoted 「…」 words), the same way
-`migrate` fills it; a ref without a registry row is refused. `part_of` = the feature/function/component whose
-document referenced it (component when cross-cutting). A registry that is only a draft list, or a fact that has no
+gets the registry entry verbatim (Statement / Text, Primary source / Source, Copies, quoted 「…」 words, and the date of
+a heading entry), the same way `migrate` fills it; a ref without a registry entry is refused. A registry entry is a
+table row (`| D-001 | … |`), a list item (`- D-001 …`) or a whole heading section (`### D-001: …` up to the next heading
+of the same level, u61). `part_of` = the feature/function whose document referenced it; when several features
+reference it, their **lowest common ancestor** (e.g. the group `common`) with `affects` to each of them; the component
+only when they lie in different groups or components (D46). A registry that is only a draft list, or a fact that has no
 registry row, goes in with `add <id> <type> "<name>" --section 'Heading=text' …` (search before add, P4).
-Then record the state the registry text states, proposed in one table and confirmed by the user:
+Then record the state the registry text states, proposed in one table and confirmed by the user. The registry text is
+recorded as written; when git history plainly disagrees with it (e.g. the entry says "not implemented" and a commit
+implemented it), keep the registry's state and raise the disagreement as a Step-5 discrepancy (D46):
 - decision `wip_status` (`set-status`): `DONE` when implemented or nothing to implement, `PLANNED` when decided but
   not yet implemented, `IN_PROGRESS` when partly done;
 - issue state: closed ones with `close <id> resolved|transferred --by <decision id | commit | text>` (when `--by` names a
   decision, `close` also adds the `resolves` edge — do not add it again in Step 4); every open one
-  with `set-issue <id> --owner user|claude --trigger "<when it is taken up>"` (the gate requires both, D30).
+  with `set-issue <id> --owner user|claude --trigger "<when it is taken up>"` (the gate requires both, D30); when the
+  registry names no trigger, use `when <attached node> is next worked on` (D46);
+- `resolves` only points to a resolved issue (R1): a decision that settles part of a still-open issue gets `affects` to
+  it and a line in the issue's log instead (D46).
 
 ### Step 4 — edges
 Each edge with `add-edge <src> <kind> <dst>` (an edge that already exists is reported as unchanged and not logged).
@@ -335,8 +358,12 @@ Each edge with `add-edge <src> <kind> <dst>` (an edge that already exists is rep
   already says where it is attached; `affects` names the further nodes it constrains or impacts).
 - `resolves`: from registry text such as "resolves TBD-24", "closes", "決定により解消", or a TBD entry that
   names the D-id that closed it — already added by `close --by <decision>` in Step 3.
-- `supersedes`: from registry text such as "supersedes D-010", "replaces", "上書き", "置き換え".
-- `refines`: from registry text such as "refines D-010", "narrows", "details", "補足", "詳細化" (the earlier decision stays in force).
+- `supersedes`: only for a **full** replacement — registry text such as "supersedes D-010", "replaces", "上書き",
+  "置き換え", "廃止" naming the whole decision.
+- `revises` (D45): a **partial** replacement — "revises / amends part of D-010", "D-010 の改定", "決定 N の改定",
+  "〜を改めた": the earlier decision stays in force except for the part named. When unsure between the two, use
+  `revises` (it hides nothing) and record the doubt as an issue.
+- `refines`: from registry text such as "refines D-010", "narrows", "details", "補足", "詳細化" (nothing is replaced).
 - `depends_on`: from explicit "depends on / requires / after / blocked by / 前提" phrasing; for
   cross-component expectations, target the providing component's function/feature; create a stub node under
   the **providing** component if it does not exist (never under the requesting one).
@@ -357,7 +384,14 @@ its evidence and an open question rather than a verdict:
 - *non-product code* (samples, examples, generated code) — ask whether leaves are expected there;
 - *tests without a node*, *contract missing*, *depends_on without expectations*, *against the rank order*.
 Record each open question as an issue node (`add <id> issue … --owner user --trigger …`, R10) attached to the node it
-concerns. On a refresh, the proposal shown before the commands is the diff (nodes added / updated / not rediscovered;
+concerns. Also report the registry entries whose state disagrees with git (Step 3) and the `revises` / `supersedes`
+choices you were unsure about.
+**The next work is the review of these findings (D44)**: create a plan for it —
+`add <id> plan "Review of the init findings" --part-of <system or component> --section 'Goal=…' --section 'Approval=…'`
+— with one `function` step per group of findings (`add-node … --part-of <plan> --status PLANNED`, ordered by
+`depends_on`, the issues of a group named in the step's summary), and make the first step `current_node` and `next`
+(`set-current`, `set-next`). The gate then passes without choosing an implementation item; implementation order is
+decided when the review is done. On a refresh, the proposal shown before the commands is the diff (nodes added / updated / not rediscovered;
 edges added). Finally commit the footprint (message naming the nodes created, e.g. `graph: init (core, order-flow,
 d-001, tbd-01)`).
 
@@ -382,7 +416,7 @@ Purpose: load the full 1-hop / 2-hop neighbourhood and produce the Impact Assess
    computes; do not recompute them (R9).
 1. Resolve `<node_id>`; if absent, list the closest ids and stop. Do not guess.
 2. Subgraph: hop 0 = the node; hop 1 = every target and every source of any edge kind
-   (`part_of` both directions, `depends_on`, `affects`, `resolves`, `supersedes`, `refines`); hop 2 = same expansion
+   (`part_of` both directions, `depends_on`, `affects`, `resolves`, `supersedes`, `refines`, `revises`); hop 2 = same expansion
    from hop 1. Record hop distance and the edge path.
 3. Read every entity file, then every `docs` and `code_targets` path of every node in hops 0–2 in full (ranges for
    large files). A `decision` / `issue` node without an entity file (a graph not yet migrated) is read from its
@@ -496,7 +530,7 @@ successor's `/graph:hydrate <current_node>` output is the view. A pause is compl
    the entity logs. The `Structure model` findings of `check` (code without a leaf, contract missing, tests without a
    node, missing expectations, rank order, contracts newer than their tests) touching this session's nodes are
    acknowledged: fixed now, or recorded as issues with owner and trigger.
-3. **Fold check (D31, D37)**: a candidate is a decision that is a `supersedes` target, has no other live in-edges (a `refines` in-edge is live, u46) and
+3. **Fold check (D31, D37)**: a candidate is a decision that is a `supersedes` target, has no other live in-edges (a `refines` or `revises` in-edge is live, u46, D45) and
    is not IN_PROGRESS / BLOCKED / FOLDED. On approval, `graph_tool.py fold <victim> <survivor>` **hides** it: the victim
    keeps its node and entity file, gets `wip_status: FOLDED`, the survivor `supersedes` it and inherits its `affects`.
    Folded decisions are hidden from hydrate by default (history count; `--history` shows them). Resolved issues need no
@@ -525,7 +559,7 @@ Growth and fold are proposals in the interaction language; they are never applie
 
 | Rule | Content |
 |------|---------|
-| **R1 Cross-reference validation** | Executed by `graph_tool.py validate`; the checks are: `nodes[k].id == k` (fix the key, never the id). Every target of `part_of` / `depends_on` / `affects` / `resolves` / `supersedes` / `refines` and `current_node` exists. No self-edges. `part_of` ≤ 1 and acyclic. `resolves` only decision → issue, and its target has `issue_status: resolved`; `supersedes` and `refines` only decision → decision. `source_ref` matches some `config.registries[].id_pattern` when registries are defined. Non-component `code_targets` and `test_targets` fall under the union of component `code_targets`. At most one `system`; when it exists every component is `part_of` it; a `requirement` is `part_of` the system; a `group` is `part_of` a component or group and its `class` is a `config.classes` id (D38). Schema-valid (run `python3 -c "import json,jsonschema;jsonschema.Draft202012Validator(json.load(open('${CLAUDE_PLUGIN_ROOT}/skills/protocol/schema/graph_schema.json'))).validate(json.load(open('dependency_graph.json')));print('OK')"` when available; otherwise check manually and say so). Schema self-test: `python3 ${CLAUDE_PLUGIN_ROOT}/skills/protocol/schema/fixtures/run_fixtures.py` (positive + negative fixtures; must print all PASS). |
+| **R1 Cross-reference validation** | Executed by `graph_tool.py validate`; the checks are: `nodes[k].id == k` (fix the key, never the id). Every target of `part_of` / `depends_on` / `affects` / `resolves` / `supersedes` / `refines` / `revises` and `current_node` exists. No self-edges. `part_of` ≤ 1 and acyclic. `resolves` only decision → issue, and its target has `issue_status: resolved`; `supersedes`, `refines` and `revises` only decision → decision. `source_ref` matches some `config.registries[].id_pattern` when registries are defined. Non-component `code_targets` and `test_targets` fall under the union of component `code_targets`. At most one `system`; when it exists every component is `part_of` it; a `requirement` is `part_of` the system; a `group` is `part_of` a component or group and its `class` is a `config.classes` id (D38). Schema-valid (run `python3 -c "import json,jsonschema;jsonschema.Draft202012Validator(json.load(open('${CLAUDE_PLUGIN_ROOT}/skills/protocol/schema/graph_schema.json'))).validate(json.load(open('dependency_graph.json')));print('OK')"` when available; otherwise check manually and say so). Schema self-test: `python3 ${CLAUDE_PLUGIN_ROOT}/skills/protocol/schema/fixtures/run_fixtures.py` (positive + negative fixtures; must print all PASS). |
 | **R2 Hydration** | If `dependency_graph.json` exists, never modify code before `/graph:hydrate <node_id>` of the relevant node with every pre-modification check ticked. If the node does not exist, create it first (init refresh or manual addition passing R1). If the user explicitly asks to skip, state the risk in one sentence, record the skip as an issue node (`add <id> issue …` with owner and trigger), proceed. |
 | **R3 Handover fidelity** | Nothing a successor needs lives outside the graph and its entity files (D30): verbatim decisions and reasons, identifiers chosen or renamed, options rejected and the user's words go into the entity of the node they concern; anything unresolved is an issue node with owner and trigger. |
 | **R4 Interaction language** | Every question, recommendation table, approval request, proposal (split / fold / component) and checklist shown to the user is written in `config.interaction_language` (inferred from CLAUDE.md and the user's messages when unset). Graph contents, entity files, generated views and SKILL text stay English. |

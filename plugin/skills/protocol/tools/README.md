@@ -30,7 +30,7 @@
 | `set-next <node> [--off]` | yes | set / clear `next` (not on component / decision), then validate |
 | `set-issue <issue> [--owner user\|claude] [--trigger TEXT]` | yes | set who resolves an issue and when, then validate |
 | `close <issue> <resolved\|transferred> --by <decision\|commit\|text>` | yes | set `issue_status` + `closed_by`; when `--by` names a decision (node id or registry id) also adds `<decision>.resolves -> <issue>`, then validate |
-| `add-edge <src> <kind> <dst>` | yes | add one edge (`part_of`, `depends_on`, `affects`, `resolves`, `supersedes`, `refines`), then validate; an existing edge is reported unchanged and not logged |
+| `add-edge <src> <kind> <dst>` | yes | add one edge (`part_of`, `depends_on`, `affects`, `resolves`, `supersedes`, `refines`, `revises`), then validate; an existing edge is reported unchanged and not logged |
 | `remove-edge <src> <kind> <dst>` | yes | remove one edge, then validate (e.g. a `supersedes` that only meant `refines`, u46) |
 | `set-current <node\|null>` | yes | set `current_node`, then validate |
 | `add-node <id> <type> "<name>" [--part-of P] [--doc F[#section]]… [--code F]… [--test F]… [--class C] [--section 'Heading=text']… [--source-ref ID] [--status S] [--next] [--owner O] [--trigger T]` | yes | create a node **and its entity file** (decision / issue with `--source-ref`: sections copied verbatim from the matching registry row, as `migrate` does, and refused when no registry row exists — u49; otherwise `--summary` text or "(not recorded in the source)"; issue nodes start with `issue_status: open`; `--owner`/`--trigger` issue only), then validate |
@@ -40,6 +40,8 @@
 | `move <node> <new-parent> --reason T` | yes | change `part_of` of a structure node in one validated step; the reason is logged in both parents' entity files (D43 R1) |
 | `group <id> <group\|feature\|function> "<name>" --under <parent> <child> … --reason T [--class C] [--summary T] [--criterion T]` | yes | insert a node between a parent and some of its children (D43 R2) |
 | `dissolve <node> --reason T [--map <referrer>=<target> …] [--docs-to N] [--code-to N] [--tests-to N]` | yes | the node's structure children go to its parent; the node stays as hidden history (`FOLDED`); every other reference and its own paths must be mapped, otherwise the command lists them and changes nothing (D43 R3) |
+| `apply <file> [--verbose]` | yes | run a file of graph_tool commands (one JSON array of arguments per line) as one write: each command is validated as usual; on the first failure the graph, entity files, views and log are restored and nothing is kept; `install`, `uninstall`, `apply` are refused inside (u62) |
+| `refs [--doc PATH]… [--json]` | no | per document in `docs_scope` and per section: the code / test names and paths it mentions (source files listed by name, never read), counts per document, and how many code files no document names — the evidence for init's proposals (u62, R9) |
 | `migrate --add-system --system-name "<name>" [--system-id ID] [--dry-run]` | yes | existing graphs: add the `system` apex and put every component under it (D38 P6) |
 | `hydrate --dry-run <node>` | no | full checklist without writing `current_node` (for reviews) |
 

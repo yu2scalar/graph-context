@@ -100,8 +100,12 @@ entity file holds only what no document states — so the divergence between doc
 **Restructuring**: `move`, `group` (insert a layer) and `dissolve` (the node stays as hidden history); proposals,
 applied on approval.
 
+**At project scale**: `refs` lists per document and section the code and tests it names (the evidence for init);
+`apply <file>` runs a file of commands as one all-or-nothing write. init ends with a review plan of the
+discrepancies it found as the next work.
+
 **Edges**: `part_of` (child → parent, at most one), `depends_on`, `affects` (decision / issue / requirement → what it constrains), `resolves` (decision → issue),
-`supersedes` (decision → decision it replaces), `refines` (decision → decision it narrows; the target stays in force).
+`supersedes` (decision → decision it replaces), `refines` (decision → decision it narrows; the target stays in force), `revises` (decision → decision it partly replaces; the rest stays in force and visible).
 
 **Entity files**: every node's text lives in exactly one append-only file, `docs/entities/<id>.md`; status and
 edges live only in the graph. Readable registers are generated from both (`config.views`).

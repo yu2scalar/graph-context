@@ -44,6 +44,7 @@ Deliberately absent: `code_roots` (derived: union of component nodes' `code_targ
 | `resolves` | no | nodeId[] | decision → issue only |
 | `supersedes` | no | nodeId[] | decision → decision only; the target is replaced (fold candidate) |
 | `refines` | no | nodeId[] | decision → decision only; the target stays in force (never a fold candidate, u46) |
+| `revises` | no | nodeId[] | decision → decision only; the source replaces part of the target, the rest stays in force (never a fold candidate, D45) |
 | `source_ref` | no | string | registry id verbatim (`D-022`, `TBD-24`); decision/issue only; single-valued |
 | `wip_status` | no | enum | `PLANNED` \| `IN_PROGRESS` \| `BLOCKED` \| `DONE` \| `FOLDED`; `PLANNED` = not-yet-started plan step (D33, D34 R-b); on decisions the implementation state, `FOLDED` = absorbed by the superseding decision, hidden history (D31, D37; set only by `fold`); on a group / feature / function `FOLDED` = dissolved, hidden history (D43; set only by `dissolve`); never on issue nodes |
 | `next` | no | bool | the item to take up next (D33); feature/function/task/issue only |
@@ -66,6 +67,6 @@ decision on approval: it stays as a node with `wip_status: FOLDED`, linked by th
 
 ## Invariants enforced by the skill (R1), not expressible in JSON Schema
 key == id · every edge target exists · no self-edges · `part_of` acyclic · `resolves` decision→issue (target `issue_status: resolved`) ·
-`supersedes` / `refines` decision→decision · `source_ref` matches a registry pattern when registries exist ·
+`supersedes` / `refines` / `revises` decision→decision · `source_ref` matches a registry pattern when registries exist ·
 non-component `code_targets` and `test_targets` under some component's roots · at most one system; when it exists every
 component is part_of it · requirement part_of the system · group part_of a component or group, `class` a configured id.
