@@ -26,7 +26,7 @@ Usage (run from the project root that holds dependency_graph.json):
   graph_tool.py set-issue <issue> [--owner user|claude] [--trigger TEXT]   set owner / trigger of an issue, validate
   graph_tool.py close <issue> <resolved|transferred> --by <decision-id|commit|text>
                                               close an issue; when --by names a decision node, also add <decision>.resolves -> <issue>
-  graph_tool.py add-edge <src> <kind> <dst>   add one edge (part_of|depends_on|affects|resolves|supersedes|refines), validate
+  graph_tool.py add-edge <src> <kind> <dst>   add one edge (part_of|depends_on|affects|resolves|supersedes|refines|revises), validate
   graph_tool.py remove-edge <src> <kind> <dst>   remove one edge, validate
   graph_tool.py set-current <node|null>       set current_node, validate
   graph_tool.py add-node <id> <type> "<name>" [--part-of P] [--doc PATH ...] [--code PATH ...] [--source-ref ID]
@@ -41,6 +41,8 @@ Usage (run from the project root that holds dependency_graph.json):
                                               insert a node between a parent and some children (D43 R2)
   graph_tool.py dissolve <node> --reason TEXT [--map <referrer>=<target> ...] [--docs-to N] [--code-to N] [--tests-to N]
                                               children to the parent, node kept as hidden history; refuses while a reference is unmapped (D43 R3)
+  graph_tool.py apply <file> [--verbose]      run a file of commands (one JSON array of arguments per line) as one write: all or nothing (u62)
+  graph_tool.py refs [--doc PATH ...] [--json]  per document: the code / test names and paths it mentions, with the section (read-only, u62)
   graph_tool.py migrate --add-system --system-name "<name>" [--system-id ID] [--dry-run]   add the apex over every component (D38 P6)
   graph_tool.py hydrate --dry-run <node>      same output, no current_node write
 Options: --graph PATH (default dependency_graph.json). --lang ja|en may be given before or after the sub-command;
@@ -52,7 +54,7 @@ Exit code: 0 ok, 1 = validation errors or bad usage.
 import argparse, datetime, hashlib, json, os, re, shutil, subprocess, sys
 from collections import Counter, defaultdict
 
-EDGES = ("part_of", "depends_on", "affects", "resolves", "supersedes", "refines")  # refines: decision -> decision it narrows but does not replace (u46); never a fold candidate
+EDGES = ("part_of", "depends_on", "affects", "resolves", "supersedes", "refines", "revises")  # refines: decision -> decision it narrows but does not replace (u46); revises: decision -> decision it partly replaces (D45); neither is a fold candidate
 WIP = ("PLANNED", "IN_PROGRESS", "BLOCKED", "DONE")
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCHEMA_PATH = os.path.normpath(os.path.join(HERE, "..", "schema", "graph_schema.json"))
@@ -399,7 +401,7 @@ def validate(g, want_schema=True, drift=True):
                 problems.append(f"{k}.resolves -> {t} is not an issue")
             elif t in ns and ns[t].get("issue_status", "open") != "resolved":
                 problems.append(f"{k}.resolves -> {t} but {t}.issue_status is {ns[t].get('issue_status', 'unset')} (must be resolved)")
-        for e in ("supersedes", "refines"):
+        for e in ("supersedes", "refines", "revises"):
             if n.get(e) and n["type"] != "decision":
                 problems.append(f"{k}.{e} on a {n['type']} (decision nodes only)")
             for t in n.get(e, []):
@@ -564,6 +566,20 @@ def structure_checks(g):
         if loose_t: out.append(("info", "tests without a node", f"{len(loose_t)} unit / integration test files (D42 T4): " + ", ".join(loose_t)))
         if unrule: out.append(("info", "test files matching no rule", f"{len(unrule)} files under test_roots match no config.test_kinds pattern: " + ", ".join(unrule)))
     tested_docs = {d.split("#", 1)[0] for n in live.values() if n.get("test_targets") for d in n.get("docs", [])}
+    croots = sorted(((r, k) for k, n in ns.items() if n["type"] == "component" for r in n["code_targets"]), key=lambda x: -len(x[0]))
+    for k in leaves:  # D46 (Q3): a leaf lives in the component of its file
+        own = next((c for r, c in croots if covered(ns[k]["code_targets"][0], [r])), None); at = component_of(ns, k)
+        if own and at != own:
+            out.append(("warn", k, f"its file `{ns[k]['code_targets'][0]}` is in component `{own}` but the leaf is under `{at}` — place it in `{own}` and point to it with a docs anchor (D46)"))
+    import glob as _g
+    attached = {d.split("#", 1)[0] for n in ns.values() for d in n.get("docs", [])} | {r["file"] for r in cfg.get("registries", [])} | {v["path"] for v in cfg.get("views", [])}
+    loose_docs = sorted({d for p_ in cfg.get("docs_scope", []) for d in _g.glob(p_, recursive=True) if not d.startswith((ENTITY_DIR + "/", "docs/views/"))} - attached)
+    if loose_docs:  # D46: every document in scope belongs somewhere (a feature, or docs of the system / a component / a group)
+        out.append(("info", "documents attached nowhere", f"{len(loose_docs)} documents in docs_scope are no node's docs (D46): " + ", ".join(loose_docs)))
+    for t in cfg.get("test_roots", []):  # D46: test_roots must not swallow a source tree
+        for r, c in croots:
+            if covered(r, [t]):
+                out.append(("warn", "test_roots", f"test root `{t}` contains the root `{r}` of component `{c}` — its source files would count as tests (D46)"))
     for k in leaves:  # D42 T5: a leaf reached by no test
         if not ns[k].get("test_targets") and not any(d.split("#", 1)[0] in tested_docs for d in ns[k].get("docs", [])):
             out.append(("info", k, "no test reaches this leaf (neither its own test_targets nor a test on a node of its documents) (D42 T5)"))
@@ -686,6 +702,7 @@ def render_view(g, kind):
     sec = lambda k: entity_sections(ns[k]["file"]) if ns[k].get("file") and os.path.exists(ns[k]["file"]) else {}
     rel = lambda k: "; ".join(x for x in (("supersedes " + ", ".join(ns[k]["supersedes"])) if ns[k].get("supersedes") else "",
                                           ("refines " + ", ".join(ns[k]["refines"])) if ns[k].get("refines") else "",
+                                          ("revises " + ", ".join(ns[k]["revises"])) if ns[k].get("revises") else "",
                                           ("resolves " + ", ".join(ns[k]["resolves"])) if ns[k].get("resolves") else "") if x) or "—"
     ref = lambda k: ns[k].get("source_ref", k)
     decs = sorted((k for k, n in ns.items() if n["type"] == "decision"), key=lambda k: (re.sub(r"\d", "", ref(k)), int(re.sub(r"\D", "", ref(k)) or 0)))
@@ -892,16 +909,16 @@ def cmd_hydrate(g, args):
         print(f"- hop {hop[k][0]} `{k}` ({n.get('source_ref', '—')}): {st_}" + (f" — folded: {', '.join(n['folded'])}" if n.get("folded") else ""))
     if not dec: print("- none")
     print()
-    print("### Decisions to re-examine (hop 0–1 decisions: affects ∪ resolves ∪ supersedes ∪ superseded-by ∪ refines ∪ refined-by ∪ same-parent decisions)")
+    print("### Decisions to re-examine (hop 0–1 decisions: affects ∪ resolves ∪ supersedes ∪ superseded-by ∪ refines ∪ refined-by ∪ revises ∪ revised-by ∪ same-parent decisions)")
     adj = adjacency(ns); rows = []
     for k in sorted(hop, key=lambda x: (hop[x][0], x)):
         if hop[k][0] <= 1 and ns[k]["type"] == "decision":
             n = ns[k]
-            rel = set(n.get("affects", [])) | set(n.get("resolves", [])) | set(n.get("supersedes", [])) | set(n.get("refines", [])) | {s for s, e in adj[k] if e in ("rev-supersedes", "rev-refines")}
+            rel = set(n.get("affects", [])) | set(n.get("resolves", [])) | set(n.get("supersedes", [])) | set(n.get("refines", [])) | set(n.get("revises", [])) | {s for s, e in adj[k] if e in ("rev-supersedes", "rev-refines", "rev-revises")}
             parent = n.get("part_of", [None])[0]
             sib = sorted(j for j, m in ns.items() if m["type"] == "decision" and m.get("part_of") == [parent] and j != k)
             rows.append((k, n.get("source_ref", "—"), ", ".join(sorted(rel)) or "—", f"{len(sib)} siblings under `{parent}`"))
-    print(table(["decision", "registry id", "affects/resolves/supersedes/refines", "same-parent"], rows)); print()
+    print(table(["decision", "registry id", "affects/resolves/supersedes/refines/revises", "same-parent"], rows)); print()
     print("### Existing capabilities (R8 — name/path overlap across all components)")
     words = {w for w in re.split(r"[^a-z0-9]+", (origin + " " + ns[origin]["name"]).lower()) if len(w) > 3}
     rows = []
@@ -1297,9 +1314,15 @@ def scan_rows(g):
     rows = defaultdict(list)
     for f in files:
         if not os.path.exists(f): continue
-        for i, line in enumerate(open(f, encoding="utf-8", errors="replace"), 1):
+        lines = open(f, encoding="utf-8", errors="replace").read().splitlines()
+        for i, line in enumerate(lines, 1):
             m = re.match(r"^\| ([A-Za-z]+-?\d+) \|", line) or re.match(r"^- ([A-Z]+-?\d+) ", line)  # table row or list item
-            if m: rows[m.group(1)].append((f, i, line.rstrip("\n")))
+            if m: rows[m.group(1)].append((f, i, line)); continue
+            h = re.match(r"^(#{2,4}) ([A-Za-z]+-?\d+)(?=[\s:：（(]|$)", line)  # u61: one entry per heading ('### D-130: …')
+            if h:
+                lvl = len(h.group(1)); j = i
+                while j < len(lines) and not re.match(r"^#{1,%d} " % lvl, lines[j]): j += 1
+                rows[h.group(2)].append((f, i, "\n".join(lines[i - 1:j]).rstrip()))
     return rows
 
 def migrate_sections(g, k, rows):
@@ -1320,7 +1343,7 @@ def migrate_sections(g, k, rows):
     public = NOT_RECORDED
     for r in regs:
         if r.get("public_column") and ref and re.match(r["id_pattern"], ref):
-            hit = [c for c in copies if c[0] == r["file"]]
+            hit = [c for c in copies if c[0] == r["file"] and c[2].startswith("|")]  # a column exists only in table rows
             if hit:
                 cells = split_cells(hit[0][2]); col = r["public_column"] - 1
                 if col < len(cells): public = cells[col]
@@ -1331,22 +1354,30 @@ def migrate_sections(g, k, rows):
     for c in copies:
         for q in re.findall(r"「[^」]+」", c[2]):
             if q not in quotes: quotes.append(q)
-    copy_txt = "\n".join(f"- `{f}:{i}`\n  {row}" for f, i, row in copies) or NOT_RECORDED
+    heading = lambda row: row.startswith("#")  # u61: a heading entry is the whole section; it is the Statement / Text once, not repeated in Copies
+    copy_txt = "\n".join(f"- `{f}:{i}`" + (" (heading entry: its full text is the Statement / Text above)" if heading(row) and primary and (f, i) == primary[1][:2] else
+                                           "\n  " + row.replace("\n", "\n  ")) for f, i, row in copies) or NOT_RECORDED
     folded = []
     for fid in n.get("folded", []):
         for f, i, row in rows.get(fid, []):
             folded.append(f"- {fid} `{f}:{i}`\n  {row}")
+    date = NOT_RECORDED
+    if primary and heading(primary[1][2]):
+        dm = re.search(r"\d{4}-\d{2}-\d{2}", primary[1][2].splitlines()[0])  # the date the heading line states, if any
+        if dm: date = dm.group(0)
     if t == "decision":
         sec = {"Statement": prim_txt, "Public summary": public, "User's words": " ".join(quotes) or NOT_RECORDED,
-               "Reason": NOT_RECORDED + " — see the copies", "Date": NOT_RECORDED, "Primary source": prim_src, "Copies": copy_txt}
+               "Reason": NOT_RECORDED + (" — see the Statement" if primary and heading(primary[1][2]) else " — see the copies"), "Date": date,
+               "Primary source": prim_src, "Copies": copy_txt}
     else:
         sec = {"Text": prim_txt + ("\n\n(The row's status / owner / trigger columns are historical; the current state is on the node.)" if primary else ""),
                "Source": prim_src, "Copies": copy_txt}
     if folded: sec["Folded"] = "\n".join(folded)
     differ = None
-    if len(copies) > 1:
-        texts = {re.sub(r"\W+", "", " ".join(split_cells(c[2])[1:2]).lower()) for c in copies}
-        if len(texts) > 1: differ = [f"{f}:{i}" for f, i, _ in copies]
+    tables = [c for c in copies if c[2].startswith("|")]
+    if len(tables) > 1:
+        texts = {re.sub(r"\W+", "", " ".join(split_cells(c[2])[1:2]).lower()) for c in tables}
+        if len(texts) > 1: differ = [f"{f}:{i}" for f, i, _ in tables]
     return sec, differ
 
 def append_section(path, heading, text):
@@ -1849,6 +1880,75 @@ def cmd_dissolve(g, args):
     save_restructure(g, args, backup, f"dissolve {k} -> {parent}: children {', '.join(kids) or 'none'}; mapped {', '.join(f'{a}={b}' for a, b in mp.items()) or 'none'} ({args.reason})")
     print(f"dissolved `{k}`: {len(kids)} children moved to `{parent}`; kept as hidden history"); return cmd_validate(g, args)
 
+APPLY_REFUSED = ("install", "uninstall", "apply")
+
+def cmd_apply(g, args):
+    """u62: run a file of graph_tool commands (one JSON array of arguments per line, e.g. ["add-node", "x", "function", "X"])
+    as one write: every command runs and validates as usual; when one fails, the graph, entity files, views and the log are
+    restored to their state before the file and nothing is kept."""
+    import io, contextlib, glob as _g
+    try:
+        cmds = [(i, json.loads(l)) for i, l in enumerate(open(args.file, encoding="utf-8"), 1) if l.strip()]
+    except (OSError, json.JSONDecodeError) as e: print(f"ERROR: {args.file}: {e}"); return 1
+    bad = [i for i, c in cmds if not (isinstance(c, list) and c and all(isinstance(x, str) for x in c)) or c[0] in APPLY_REFUSED]
+    if bad: print(f"ERROR: lines {bad[:10]} are not a JSON array of strings or name a command apply refuses ({', '.join(APPLY_REFUSED)})"); return 1
+    keep = [args.graph, LOG_PATH] + [v["path"] for v in g["config"].get("views", [])]
+    snap = {f: open(f, encoding="utf-8").read() for f in keep + sorted(_g.glob(os.path.join(ENTITY_DIR, "*.md"))) if os.path.exists(f)}
+    def restore():
+        for f in set(_g.glob(os.path.join(ENTITY_DIR, "*.md"))) - set(snap): os.remove(f)
+        for f in keep:
+            if f not in snap and os.path.exists(f): os.remove(f)
+        for f, t in snap.items(): open(f, "w", encoding="utf-8").write(t)
+    b4 = md5(args.graph)
+    for i, c in cmds:
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            try: rc = main(["--graph", args.graph] + c)
+            except SystemExit as e: rc = e.code or 1  # argparse errors
+        if rc != 0:
+            restore()
+            print(f"## apply {args.file} — refused at line {i}, nothing kept (graph, entity files, views and log restored)")
+            print(f"command: {json.dumps(c, ensure_ascii=False)[:300]}"); print("\n".join(buf.getvalue().strip().splitlines()[-15:])); print("RESULT: FAIL"); return 1
+        if args.verbose: print(f"ok {i}: {' '.join(c)[:160]}")
+    g2 = load(args.graph)
+    log_op(g2, f"apply {args.file}: {len(cmds)} commands", args.graph, b4, force=True)
+    print(f"## apply {args.file}: {len(cmds)} commands applied"); return cmd_validate(g2, args)
+
+def cmd_refs(g, args):
+    """u62 / R9: per document in docs_scope (or --doc), the code and test files it names — by path or by class / module name —
+    with the section (nearest heading) where the name occurs. Read-only; source files are listed by name, never read."""
+    import glob as _g
+    cfg = g["config"]; exts = set(cfg.get("source_extensions") or [".java", ".kt", ".cs", ".py", ".ts", ".go", ".rs"])
+    files = [f for r in component_roots(g["nodes"]) if os.path.isdir(r) for f in list_files(r, exts)]
+    troots = cfg.get("test_roots", [])
+    by_name = defaultdict(list)
+    for f in files: by_name[os.path.splitext(os.path.basename(f))[0]].append(f)
+    docs = args.doc or sorted({d for p_ in cfg.get("docs_scope", []) for d in _g.glob(p_, recursive=True)
+                               if not d.startswith((ENTITY_DIR + "/", "docs/views/"))})
+    rows, per_doc, named = [], {}, set()
+    for d in docs:
+        if not os.path.exists(d): print(f"ERROR: `{d}` does not exist"); return 1
+        sec_, seen = "(top)", set()
+        for line in open(d, encoding="utf-8", errors="replace"):
+            h = re.match(r"^#{1,6}\s+(.+?)\s*$", line)
+            if h: sec_ = h.group(1)[:60]; continue
+            hits = {tok for tok in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", line) if tok in by_name}
+            hits |= {os.path.splitext(os.path.basename(f))[0] for f in files if f in line}
+            for tok in sorted(hits):
+                if (tok, sec_) in seen: continue
+                seen.add((tok, sec_)); fs = by_name[tok]; named.update(fs)
+                kind = "test" if all(covered(x, troots) or test_kind(g, x) in ("unit", "integration", "helper") for x in fs) else "code"
+                rows.append((d, sec_, tok, kind, ", ".join(fs) if len(fs) <= 3 else f"{len(fs)} files (ambiguous)"))
+        per_doc[d] = (len({r[2] for r in rows if r[0] == d and r[3] == "code"}), len({r[2] for r in rows if r[0] == d and r[3] == "test"}))
+    if args.json:
+        print(json.dumps([dict(zip(("doc", "section", "name", "kind", "files"), r)) for r in rows], ensure_ascii=False, indent=1)); return 0
+    print("## refs (names and paths only; source files are never read)")
+    print(table(["document", "section", "name", "kind", "files"], rows))
+    print(); print(table(["document", "code names", "test names"], [(d, a, b) for d, (a, b) in per_doc.items()]))
+    code = [f for f in files if not covered(f, troots) and not test_kind(g, f)]
+    print(f"\ncode files under component roots: {len(code)}; named by these documents: {len([f for f in code if f in named])}; not named: {len([f for f in code if f not in named])}")
+    return 0
+
 def add_system(g, args):
     """D38 P6: existing graphs gain the apex — one system node, every component part_of it."""
     ns = g["nodes"]
@@ -1894,6 +1994,8 @@ def main(argv=None):
     sp("set-source-ref", "node", "ref")
     p = sp("move", "node", "parent"); p.add_argument("--reason", required=True)
     p = sp("group", "id", "type", "name"); p.add_argument("--under", required=True); p.add_argument("children", nargs="+"); p.add_argument("--class", dest="cls"); p.add_argument("--summary"); p.add_argument("--criterion"); p.add_argument("--reason", required=True)
+    p = sp("apply", "file"); p.add_argument("--verbose", action="store_true")
+    p = sp("refs"); p.add_argument("--doc", action="append"); p.add_argument("--json", action="store_true")
     p = sp("dissolve", "node"); p.add_argument("--map", action="append"); p.add_argument("--docs-to", dest="docs_to"); p.add_argument("--code-to", dest="code_to"); p.add_argument("--tests-to", dest="tests_to"); p.add_argument("--reason", required=True)
     p = sp("backlog"); p.add_argument("--owner", choices=["user", "claude"]); p.add_argument("--next-only", dest="next_only", action="store_true"); p.add_argument("--component"); p.add_argument("--all", action="store_true")
     p = sp("set-next", "node"); p.add_argument("--off", action="store_true")
@@ -1927,7 +2029,7 @@ def main(argv=None):
           "fold": cmd_fold, "split": cmd_split, "set-status": cmd_set_status, "add-edge": cmd_add_edge, "remove-edge": cmd_remove_edge, "set-current": cmd_set_current,
           "add-node": cmd_add_node, "lint-prose": cmd_lint_prose,
           "add-doc": cmd_add_path, "add-code": cmd_add_path, "add-test": cmd_add_path, "set-source-ref": cmd_set_source_ref,
-          "move": cmd_move, "group": cmd_group, "dissolve": cmd_dissolve, "backlog": cmd_backlog, "set-next": cmd_set_next,
+          "move": cmd_move, "group": cmd_group, "dissolve": cmd_dissolve, "apply": cmd_apply, "refs": cmd_refs, "backlog": cmd_backlog, "set-next": cmd_set_next,
           "set-issue": cmd_set_issue, "close": cmd_close, "add": cmd_add, "append": cmd_append, "attach": cmd_attach, "migrate": cmd_migrate, "rename": cmd_rename, "config": cmd_config, "render": cmd_render}[args.cmd](g, args)
     except WriteRefused as e:
         print("## write refused — the graph would be invalid; nothing was written (U31)")

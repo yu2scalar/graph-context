@@ -374,5 +374,59 @@ def test_structure_model():
     finally:
         os.chdir(cwd); shutil.rmtree(tmp)
 
+def test_run2_fixes():
+    """plan-run2: heading registries (u61), revises (D45), apply / refs (u62), placement checks (D46)."""
+    import io, contextlib
+    tmp = tempfile.mkdtemp(); cwd = os.getcwd(); os.chdir(tmp)
+    def cli(*a):
+        b = io.StringIO()
+        with contextlib.redirect_stdout(b): rc = gt.main(list(a))
+        return rc, b.getvalue()
+    try:
+        for d in ("src/main", "tools/main", "docs/design"): os.makedirs(d)
+        for f in ("src/main/Router.java", "src/main/PgWriter.java", "tools/main/Jobs.java"): open(f, "w").write("x")
+        open("docs/design/log.md", "w").write("# Log\n\n### D-007（D-001 の改定）: seven 2026-10-19\n- body 「quoted」\n\n### D-008: eight\n- b\n")
+        open("docs/design/routing.md", "w").write("# Routing\n## 2 Order\nRouter calls `src/main/PgWriter.java`.\n")
+        open("docs/design/loose.md", "w").write("# Loose\n")
+        g = {"current_node": None, "config": {"registries": [{"type": "decision", "id_pattern": "^D-\\d{3}$", "file": "docs/design/log.md"}],
+                                              "docs_scope": ["docs/design/**/*.md"], "source_extensions": [".java"], "test_roots": ["tools/"]},
+             "nodes": {"core": {"id": "core", "type": "component", "name": "Core", "docs": [], "code_targets": ["src/"]},
+                       "tools": {"id": "tools", "type": "component", "name": "Tools", "docs": [], "code_targets": ["tools/"]},
+                       "routing": {"id": "routing", "type": "feature", "name": "Routing", "docs": ["docs/design/routing.md"], "code_targets": [], "part_of": ["core"]},
+                       "router": {"id": "router", "type": "function", "name": "Router", "docs": ["docs/design/routing.md#2"], "code_targets": ["src/main/Router.java"], "part_of": ["routing"]},
+                       "jobs": {"id": "jobs", "type": "function", "name": "Jobs", "docs": ["docs/design/routing.md#2"], "code_targets": ["tools/main/Jobs.java"], "part_of": ["routing"]}}}
+        p = "dependency_graph.json"; gt.save(p, g)
+        # u61: heading entries
+        rc, out = cli("add-node", "d-007", "decision", "seven", "--part-of", "routing", "--source-ref", "D-007"); assert rc == 0, out
+        s7 = gt.entity_sections("docs/entities/d-007.md")
+        assert s7["Statement"].startswith("### D-007") and "body" in s7["Statement"] and s7["Date"] == "2026-10-19" and s7["User's words"] == "「quoted」" and "heading entry" in s7["Copies"], s7
+        rc, out = cli("add-node", "d-008", "decision", "eight", "--part-of", "routing", "--source-ref", "D-008"); assert rc == 0, out
+        # D45: revises is decision -> decision, never a fold candidate
+        rc, out = cli("add-edge", "d-007", "revises", "d-008"); assert rc == 0, out
+        assert not any(c[0] == "d-008" for c in gt.fold_candidates(gt.load(p))), "a revised decision is no fold candidate"
+        rc, out = cli("add-edge", "routing", "revises", "d-008"); assert rc == 1 and "decision nodes only" in out, out
+        rc, out = cli("hydrate", "--dry-run", "d-007"); assert "revises" in out and "d-008" in out.split("Decisions to re-examine", 1)[1].split("###", 1)[0], out[-800:]
+        # u62: apply is all or nothing
+        open("ok.jsonl", "w").write(json.dumps(["add-node", "pg", "feature", "PG", "--part-of", "core", "--summary", "pg"]) + "\n" + json.dumps(["add-edge", "pg", "depends_on", "routing"]) + "\n")
+        rc, out = cli("apply", "ok.jsonl"); assert rc == 0 and "2 commands applied" in out and gt.load(p)["nodes"]["pg"]["depends_on"] == ["routing"], out
+        log0 = open(".context/graph_tool.log").read(); graph0 = open(p).read()
+        open("bad.jsonl", "w").write(json.dumps(["add-node", "pg2", "feature", "PG2", "--part-of", "core"]) + "\n" + json.dumps(["add-edge", "pg2", "depends_on", "ghost"]) + "\n")
+        rc, out = cli("apply", "bad.jsonl"); assert rc == 1 and "refused at line 2" in out, out
+        assert open(p).read() == graph0 and not os.path.exists("docs/entities/pg2.md") and open(".context/graph_tool.log").read() == log0, "a refused apply keeps nothing"
+        open("bad2.jsonl", "w").write(json.dumps(["uninstall"]) + "\n"); rc, out = cli("apply", "bad2.jsonl"); assert rc == 1 and "refuses" in out, out
+        # u62: refs lists names and paths per document with the section
+        rc, out = cli("refs"); assert rc == 0 and "| docs/design/routing.md | 2 Order | Router | code | src/main/Router.java |" in out and "| PgWriter |" in out, out
+        rc, out = cli("refs", "--json", "--doc", "docs/design/routing.md"); assert rc == 0 and json.loads(out.split("<!--")[0])[0]["section"] == "2 Order", out
+        # D46: leaf in another component, documents attached nowhere, test_roots swallowing a component root
+        txt = "\n".join(f"{a} {b} {c}" for a, b, c in gt.structure_checks(gt.load(p)))
+        assert "warn jobs its file `tools/main/Jobs.java` is in component `tools` but the leaf is under `core`" in txt, txt
+        assert "docs/design/loose.md" in txt and "docs/design/log.md" not in txt.split("documents attached nowhere", 1)[1].split("\n")[0], txt
+        assert "test root `tools/` contains the root `tools/` of component `tools`" in txt, txt
+        print("test_run2_fixes: all assertions hold"); return 0
+    except AssertionError as e:
+        print("FAIL:", e); return 1
+    finally:
+        os.chdir(cwd); shutil.rmtree(tmp)
+
 if __name__ == "__main__":
-    sys.exit(main() or test_gate() or test_install() or test_structure_model())
+    sys.exit(main() or test_gate() or test_install() or test_structure_model() or test_run2_fixes())
