@@ -41,6 +41,8 @@
 | D35 | Issue state is stored on the issue node: `issue_status` open | resolves u33 | active |
 | D36 | Integrity-first store: each decision, issue, plan and rule is one entity file written only by graph_tool (validated before saving, sha256-checked); status and edges live only in the graph; registers and other readable documents are generated; adding an entity first lists the existing ones so duplicates are caught. | supersedes d29 | active |
 | D37 | Fold hides instead of deleting: every earlier folded decision / issue is restored as a hidden history node linked by supersedes / resolves; the folded[] field is dropped; resolved issues are hidden by default, transferred ones stay visible. | resolves u41, u42, u43 | active |
+| D39 | A leaf is exactly one class (or the language's file / package unit) and only leaves carry code; features follow design documents; parents with too many children are proposed for regrouping; files no design document references are reported by name as code without a leaf. | refines d38; resolves u53 | decided, not yet implemented |
+| D40 | Node, Edge and Entity file (a node's text) are the defined terms; code is never called an entity. | resolves u54 | decided, not yet implemented |
 | S1 | `dependency_graph.json` lives at the project root | — | active |
 | S2 | v1: single SKILL.md, `/graph-*` as sub-commands | — | folded into D16 |
 | S3 | init scans design docs + referenced code, no blind source walk | — | folded into D17 |
