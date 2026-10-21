@@ -292,5 +292,87 @@ def test_install():
     finally:
         os.chdir(cwd); shutil.rmtree(tmp)
 
+def test_structure_model():
+    """D38-D43: system / requirement / group, rank warning, code only on leaves, regrouping, contracts, code and tests without
+    a node, expectations, the restructuring commands (move / group / dissolve), set-source-ref, migrate --add-system."""
+    import io, contextlib
+    tmp = tempfile.mkdtemp(); cwd = os.getcwd(); os.chdir(tmp)
+    def cli(*a):
+        b = io.StringIO()
+        with contextlib.redirect_stdout(b): rc = gt.main(list(a))
+        return rc, b.getvalue()
+    try:
+        for d in ("src/main/common", "src/main/pg", "src/test", "docs/design/common"): os.makedirs(d)
+        for f in ("src/main/common/Router.java", "src/main/common/Loose.java", "src/main/pg/PgWriter.java", "src/main/pg/PgDates.java",
+                  "src/test/RouterTest.java", "src/test/PgWriterIT.java", "src/test/TestSupport.java", "src/test/Odd.java"): open(f, "w").write("x")
+        open("docs/design/common/routing.md", "w").write("# Routing\n## 2 Route order\n")
+        g = {"current_node": None, "config": {"classes": [{"id": "common", "label": "Common", "rank": 0, "source": "docs/design/01#2"}, {"id": "features", "label": "Backend", "rank": 1}],
+                                              "leaf_unit": "class", "source_extensions": [".java"], "child_threshold": 2, "test_roots": ["src/test/"],
+                                              "test_kinds": {"unit": ["*Test.java"], "integration": ["*IT.java"], "helper": ["*Support.java"]}},
+             "nodes": {"core": {"id": "core", "type": "component", "name": "Core", "docs": [], "code_targets": ["src/"]},
+                       "common": {"id": "common", "type": "group", "name": "Common", "docs": [], "code_targets": [], "part_of": ["core"], "class": "common"},
+                       "features": {"id": "features", "type": "group", "name": "Features", "docs": [], "code_targets": [], "part_of": ["core"], "class": "features"},
+                       "router": {"id": "router", "type": "function", "name": "Router", "docs": ["docs/design/common/routing.md#2"], "code_targets": ["src/main/common/Router.java"], "part_of": ["common"], "depends_on": ["pg-writer"], "test_targets": ["src/test/RouterTest.java"]},
+                       "pg": {"id": "pg", "type": "feature", "name": "PG", "docs": [], "code_targets": ["src/main/pg/"], "part_of": ["features"]},
+                       "pg-writer": {"id": "pg-writer", "type": "function", "name": "PgWriter", "docs": [], "code_targets": ["src/main/pg/PgWriter.java"], "part_of": ["pg"], "depends_on": ["router"]},
+                       "pg-dates": {"id": "pg-dates", "type": "function", "name": "PgDates", "docs": [], "code_targets": ["src/main/pg/PgDates.java"], "part_of": ["pg"]},
+                       "pg-x": {"id": "pg-x", "type": "function", "name": "X", "docs": [], "code_targets": [], "part_of": ["pg"]}}}
+        p = "dependency_graph.json"; gt.save(p, g)
+        assert not gt.validate(gt.load(p), want_schema=False)[0], gt.validate(gt.load(p), want_schema=False)[0]
+        # W2: R1 errors
+        def errs(mut):
+            b = json.loads(json.dumps(g)); mut(b["nodes"]); return gt.validate(b, want_schema=False)[0]
+        SY = {"id": "sys", "type": "system", "name": "S", "docs": [], "code_targets": []}
+        assert any("must be part_of the system" in e for e in errs(lambda n: n.__setitem__("sys", dict(SY)))), "component outside the system"
+        assert any("more than one system" in e for e in errs(lambda n: [n.__setitem__("sys", dict(SY)), n.__setitem__("sys2", dict(SY, id="sys2")), n["core"].__setitem__("part_of", ["sys"])]))
+        assert any("requirement `r` must be part_of the system" in e for e in errs(lambda n: n.__setitem__("r", {"id": "r", "type": "requirement", "name": "R", "docs": [], "code_targets": [], "part_of": ["core"]})))
+        assert any("not a config.classes id" in e for e in errs(lambda n: n["common"].__setitem__("class", "nope")))
+        assert any("must be part_of a component or a group" in e for e in errs(lambda n: n["common"].__setitem__("part_of", ["pg"])))
+        assert any("has part_of but there is no system" in e for e in errs(lambda n: n["core"].__setitem__("part_of", ["common"])))
+        # W4: structure checks
+        f = gt.structure_checks(gt.load(p)); txt = "\n".join(f"{a} {b} {c}" for a, b, c in f)
+        assert "warn router depends_on `pg-writer`: class `common` (rank 0) depends on class `features` (rank 1)" in txt, txt
+        assert "pg-writer depends_on `router`: class" not in txt, "features -> common is allowed"
+        assert "warn pg holds code_targets but has structure children" in txt, txt
+        assert "proposal pg 3 structure children > child_threshold 2" in txt, txt
+        assert "warn pg-writer contract missing" in txt and "router contract missing" not in txt, txt
+        assert "pg-x contract missing" not in txt, "a leaf without code is not checked"
+        assert "src/main/common/Loose.java" in txt and "src/main/common/Router.java, " not in txt, txt
+        assert "src/test/PgWriterIT.java" in txt and "src/test/RouterTest.java" not in txt.split("tests without a node", 1)[1].split("\n")[0], txt
+        assert "test files matching no rule 1 files" in txt and "Odd.java" in txt and "TestSupport.java" not in txt, txt
+        assert "info pg-writer no test reaches this leaf" in txt and "info router no test reaches" not in txt, txt
+        assert "warn pg-writer depends_on `router` but states no expectation" in txt and "router depends_on `pg-writer` but states" not in txt, "a caller with a design document is not warned"
+        # W5: commands
+        rc, out = cli("add-test", "pg-writer", "src/test/TestSupport.java"); assert rc == 1 and "helper" in out, out
+        rc, out = cli("add-test", "pg-writer", "src/test/PgWriterIT.java"); assert rc == 0 and gt.load(p)["nodes"]["pg-writer"]["test_targets"] == ["src/test/PgWriterIT.java"], out
+        rc, out = cli("add-node", "pg-json", "function", "PgJson", "--part-of", "pg", "--section", "Responsibility=Checks JSON input", "--section", "Expectations=router routes it"); assert rc == 0, out
+        assert gt.entity_sections("docs/entities/pg-json.md")["Responsibility"] == "Checks JSON input", "add-node --section"
+        rc, out = cli("group", "pg-time", "group", "PG time", "--under", "pg", "pg-dates", "pg-x", "--reason", "too many children"); assert rc == 1 and "group" in out and "must be part_of a component or a group" in out, "a group under a feature is refused"
+        rc, out = cli("group", "pg-time", "function", "PG time", "--under", "pg", "pg-dates", "pg-x", "--summary", "date and time types", "--reason", "too many children"); assert rc == 0, out
+        g2 = gt.load(p); assert g2["nodes"]["pg-dates"]["part_of"] == ["pg-time"] and g2["nodes"]["pg-time"]["part_of"] == ["pg"], g2["nodes"]["pg-time"]
+        rc, out = cli("move", "pg-x", "pg", "--reason", "back up"); assert rc == 0 and gt.load(p)["nodes"]["pg-x"]["part_of"] == ["pg"], out
+        rc, out = cli("add", "d-1", "decision", "Dates as text", "--part-of", "pg-time", "--section", "Statement=s", "--section", "Public summary=p", "--section", "User's words=u", "--section", "Reason=r", "--section", "Date=2026-10-21", "--new-not-duplicate", "first"); assert rc == 0, out
+        rc, out = cli("dissolve", "pg-time", "--reason", "regroup"); assert rc == 1 and "d-1 (refers to `pg-time` by part_of)" in out and "nothing changed" in out, out
+        assert gt.load(p)["nodes"]["pg-time"].get("wip_status") != "FOLDED", "a refused dissolve changes nothing"
+        rc, out = cli("dissolve", "pg-time", "--map", "d-1=pg", "--reason", "regroup back"); assert rc == 0, out
+        g3 = gt.load(p); assert g3["nodes"]["pg-time"]["wip_status"] == "FOLDED" and g3["nodes"]["pg-dates"]["part_of"] == ["pg"] and g3["nodes"]["d-1"]["part_of"] == ["pg"], g3["nodes"]["pg-time"]
+        assert "dissolved into `pg`" in open("docs/entities/pg-time.md").read(), "the reason is logged in the dissolved node"
+        assert "pg-time" not in [k for k, _, _ in gt.regroup_candidates(g3)] and gt.hidden(g3["nodes"]["pg-time"]), "dissolved = hidden history"
+        rc, out = cli("add", "i-1", "issue", "Which date type", "--part-of", "pg", "--owner", "user", "--trigger", "t", "--section", "Text=t", "--section", "Source=s", "--new-not-duplicate", "first"); assert rc == 0, out
+        rc, out = cli("close", "i-1", "resolved", "--by", "d-1"); assert rc == 0 and gt.load(p)["nodes"]["i-1"]["closed_by"] == "d-1", out
+        rc, out = cli("set-source-ref", "d-1", "D-1"); assert rc == 0 and gt.load(p)["nodes"]["d-1"]["source_ref"] == "D-1" and gt.load(p)["nodes"]["i-1"]["closed_by"] == "D-1", out
+        # W7 + W6: migrate --add-system, the apex is shown and never expanded; the backlog finds the component under it
+        rc, out = cli("migrate", "--add-system", "--dry-run", "--system-name", "Demo"); assert rc == 0 and "part_of -> system" in out and "system" not in gt.load(p)["nodes"], out
+        rc, out = cli("migrate", "--add-system", "--system-name", "Demo"); assert rc == 0 and gt.load(p)["nodes"]["core"]["part_of"] == ["system"], out
+        g4 = gt.load(p); g4["nodes"]["other"] = {"id": "other", "type": "component", "name": "Other", "docs": [], "code_targets": ["docs/"], "part_of": ["system"]}; gt.save(p, g4)
+        assert "other" not in gt.hops(gt.load(p)["nodes"], "core"), "hops do not pass through the system node"
+        rc, out = cli("hydrate", "--dry-run", "router"); assert rc == 0 and "### System and requirements (always shown — D38)" in out and "| system | system | Demo |" in out, out[:600]
+        assert gt.component_of(gt.load(p)["nodes"], "pg-writer") == "core", "component_of under a system"
+        print("test_structure_model: all assertions hold"); return 0
+    except AssertionError as e:
+        print("FAIL:", e); return 1
+    finally:
+        os.chdir(cwd); shutil.rmtree(tmp)
+
 if __name__ == "__main__":
-    sys.exit(main() or test_gate() or test_install())
+    sys.exit(main() or test_gate() or test_install() or test_structure_model())

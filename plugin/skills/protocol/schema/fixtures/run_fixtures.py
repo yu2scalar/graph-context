@@ -47,6 +47,10 @@ good = {
                   "source_ref": "D-022", "part_of": ["core"], "affects": ["commit-protocol", "settle-lazy"],
                   "resolves": ["tbd-24"], "supersedes": []}}}
 
+SY = {"id": "sys", "type": "system", "name": "Interlock", "docs": ["docs/design/00-overview.md"], "code_targets": []}
+RQ = {"id": "req-1", "type": "requirement", "name": "Guarantees are never cut", "docs": [], "code_targets": [], "part_of": ["sys"], "affects": ["core"]}
+GR = {"id": "common", "type": "group", "name": "Common", "docs": [], "code_targets": [], "part_of": ["core"], "class": "common"}
+
 def bad(label, mutate, expect=False):
     b = copy.deepcopy(good); mutate(b); run(label, b, expect)
 
@@ -56,7 +60,7 @@ bad("root extra key rejected", lambda b: b.__setitem__("version", 1))
 bad("config unknown key rejected", lambda b: b["config"].__setitem__("code_roots", ["src/"]))
 bad("handover_path rejected (retired, D30)", lambda b: b["config"].__setitem__("handover_path", ".context/WIP_HANDOVER.md"))
 bad("missing config rejected", lambda b: b.pop("config"))
-bad("component with part_of rejected", lambda b: b["nodes"]["core"].__setitem__("part_of", ["settler"]))
+bad("system with part_of rejected (D38)", lambda b: b["nodes"].__setitem__("sys", dict(SY, part_of=["core"])))
 bad("part_of >1 rejected", lambda b: b["nodes"]["commit-protocol"].__setitem__("part_of", ["core", "settler"]))
 bad("source_ref on feature rejected", lambda b: b["nodes"]["commit-protocol"].__setitem__("source_ref", "D-001"))
 bad("resolves on issue rejected", lambda b: b["nodes"]["tbd-24"].__setitem__("resolves", ["d-022"]))
@@ -108,7 +112,25 @@ bad("next on rule rejected", lambda b: b["nodes"].__setitem__("rule-a", dict(RU,
 bad("source_ref on plan rejected", lambda b: b["nodes"].__setitem__("plan-x", dict(PL, source_ref="P1")))
 bad("owner on plan rejected", lambda b: b["nodes"].__setitem__("plan-x", dict(PL, owner="user")))
 bad("FOLDED decision OK", lambda b: b["nodes"]["d-022"].__setitem__("wip_status", "FOLDED"), True)
-bad("FOLDED feature rejected", lambda b: b["nodes"]["commit-protocol"].__setitem__("wip_status", "FOLDED"))
+bad("FOLDED feature OK (dissolved, D43)", lambda b: b["nodes"]["commit-protocol"].__setitem__("wip_status", "FOLDED"), True)
+bad("FOLDED component rejected", lambda b: b["nodes"]["core"].__setitem__("wip_status", "FOLDED"))
+# structure model (D38-D43): system, requirement, group, class, test_targets, config keys
+bad("system + component part_of system OK", lambda b: [b["nodes"].__setitem__("sys", dict(SY)), b["nodes"]["core"].__setitem__("part_of", ["sys"])], True)
+bad("requirement with affects OK", lambda b: [b["nodes"].__setitem__("sys", dict(SY)), b["nodes"].__setitem__("req-1", dict(RQ))], True)
+bad("group with class OK", lambda b: b["nodes"].__setitem__("common", dict(GR)), True)
+bad("class on feature rejected", lambda b: b["nodes"]["commit-protocol"].__setitem__("class", "common"))
+bad("test_targets on feature OK", lambda b: b["nodes"]["commit-protocol"].__setitem__("test_targets", ["src/test/x/CommitIT.java"]), True)
+bad("test_targets on decision rejected", lambda b: b["nodes"]["d-022"].__setitem__("test_targets", ["src/test/x/A.java"]))
+bad("next on system rejected", lambda b: b["nodes"].__setitem__("sys", dict(SY, next=True)))
+bad("next on group rejected", lambda b: b["nodes"].__setitem__("common", dict(GR, next=True)))
+bad("source_ref on requirement rejected", lambda b: b["nodes"].__setitem__("req-1", dict(RQ, source_ref="R-1")))
+bad("FOLDED group OK (dissolved)", lambda b: b["nodes"].__setitem__("common", dict(GR, wip_status="FOLDED")), True)
+bad("config classes / leaf_unit / thresholds / tests OK", lambda b: b["config"].update(classes=[{"id": "common", "label": "Common", "rank": 0, "source": "docs/design/01-architecture.md#2"}, {"id": "features", "label": "Backend-specific", "rank": 1}], leaf_unit="class", source_extensions=[".java"], child_threshold=7, test_roots=["src/test/"], test_kinds={"unit": ["*Test.java"], "integration": ["*IT.java"], "helper": ["*Support.java"]}), True)
+bad("class without rank rejected", lambda b: b["config"].__setitem__("classes", [{"id": "common", "label": "Common"}]))
+bad("bad leaf_unit rejected", lambda b: b["config"].__setitem__("leaf_unit", "method"))
+bad("bad extension rejected", lambda b: b["config"].__setitem__("source_extensions", ["java"]))
+bad("child_threshold 1 rejected", lambda b: b["config"].__setitem__("child_threshold", 1))
+bad("unknown test kind rejected", lambda b: b["config"].__setitem__("test_kinds", {"e2e": ["*E2E.java"]}))
 
 print(f"\n{sum(results)}/{len(results)} fixtures as expected")
 sys.exit(0 if all(results) else 1)

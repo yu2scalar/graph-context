@@ -33,7 +33,15 @@ Usage (run from the project root that holds dependency_graph.json):
                      [--status S] [--next] [--owner user|claude] [--trigger TEXT]   (issue nodes get issue_status open)
                                               create a node (the last hand-edit of the JSON), validate
   graph_tool.py lint-prose                    version strings and D-ranges in SKILL.md / README / delegates vs plugin.json and the register
-  graph_tool.py add-doc <node> <path>  /  add-code <node> <path>   append to docs / code_targets, validate
+  graph_tool.py add-doc <node> <path[#section]>  /  add-code <node> <path>  /  add-test <node> <path>
+                                              append to docs / code_targets / test_targets (D42), validate
+  graph_tool.py set-source-ref <node> <ID>    give a decision / issue its registry id afterwards; closed_by values move with it (u58)
+  graph_tool.py move <node> <new-parent> --reason TEXT          change part_of in one validated step (D43 R1)
+  graph_tool.py group <id> <group|feature|function> "<name>" --under <parent> <child> ... --reason TEXT [--class C] [--summary T] [--criterion T]
+                                              insert a node between a parent and some children (D43 R2)
+  graph_tool.py dissolve <node> --reason TEXT [--map <referrer>=<target> ...] [--docs-to N] [--code-to N] [--tests-to N]
+                                              children to the parent, node kept as hidden history; refuses while a reference is unmapped (D43 R3)
+  graph_tool.py migrate --add-system --system-name "<name>" [--system-id ID] [--dry-run]   add the apex over every component (D38 P6)
   graph_tool.py hydrate --dry-run <node>      same output, no current_node write
 Options: --graph PATH (default dependency_graph.json). --lang ja|en may be given before or after the sub-command;
 default = config.interaction_language. Tables stay English; proposal sentences follow --lang.
@@ -55,6 +63,8 @@ MSG = {
                "ja": "提案: `{n}` の分割 — 付属する decision/issue が {c} 件（しきい値 {t}）。"},
     "fold": {"en": "Proposal: fold `{v}` into `{s}` ({why}).",
              "ja": "提案: `{v}` を `{s}` に畳み込む（{why}）。"},
+    "regroup": {"en": "Proposal: regroup `{n}` — {c} structure children (child_threshold {t}); use `group` / `move` / `dissolve` (D43).",
+                "ja": "提案: `{n}` の組み替え — 構造の子が {c} 個（child_threshold {t}）。`group` / `move` / `dissolve` で（D43）。"},
     "none": {"en": "No proposals.", "ja": "提案はありません。"},
     "stale": {"en": "Stale: {n} — {what}.", "ja": "更新忘れ: {n} — {what}。"},
 }
@@ -236,6 +246,8 @@ def hops(ns, origin, depth=2):
     for h in range(1, depth + 1):
         nxt = []
         for k in frontier:
+            if k != origin and ns[k]["type"] == "system":  # D38: the apex is always shown, never expanded (it reaches every component)
+                continue
             for t, e in adj[k]:
                 if t not in hop:
                     hop[t] = (h, f"{k} {e}"); nxt.append(t)
@@ -260,6 +272,52 @@ def parent_chain(ns, k):
             return chain, True
         seen.add(k); chain.append(k)
     return chain, False
+
+# ---------------------------------------------------------------- structure model (D38-D43)
+STRUCT_CHILD = ("component", "group", "feature", "function")  # what counts as a structure child (regrouping, leaves)
+CONTRACT = ("Responsibility", "Promises", "Invariants", "Boundaries", "Acceptance criteria", "Expectations")  # D41 K3; optional entity sections
+SKIP_DIRS = {"build", ".gradle", "node_modules", "target", "dist", ".git", "out", "__pycache__"}
+
+def structure_children(ns, k):
+    return sorted(j for j, m in ns.items() if m.get("part_of") == [k] and m["type"] in STRUCT_CHILD and not hidden(m))
+
+def is_leaf(ns, k):
+    return ns[k]["type"] in ("feature", "function") and not hidden(ns[k]) and not structure_children(ns, k)
+
+def in_plan(ns, k):
+    """Plan steps (and anything under a plan) are work items, not structure: the structure checks skip them."""
+    return ns[k]["type"] == "plan" or any(ns[x]["type"] == "plan" for x in parent_chain(ns, k)[0])
+
+def code_leaf(ns, k):
+    """D39: a leaf in the structure sense = a feature / function without structure children that holds code."""
+    return is_leaf(ns, k) and bool(ns[k].get("code_targets")) and not in_plan(ns, k)
+
+def class_rank(g, k):
+    """Rank of the nearest group ancestor (or k itself) that names a configured class; None when unclassified (D38 P3)."""
+    ns = g["nodes"]; ranks = {c["id"]: c["rank"] for c in g["config"].get("classes", [])}
+    for x in [k] + parent_chain(ns, k)[0]:
+        if ns[x]["type"] == "group" and ns[x].get("class") in ranks:
+            return ns[x]["class"], ranks[ns[x]["class"]]
+    return None
+
+def covered(path, targets):
+    return any(path == t or path.startswith(t.rstrip("/") + "/") for t in targets)
+
+def list_files(root, exts):
+    """File names under a root with the given extensions — listed by name only, never read (S3, D39 G6)."""
+    out = []
+    for d, dirs, files in os.walk(root):
+        dirs[:] = sorted(x for x in dirs if x not in SKIP_DIRS)
+        out += [os.path.join(d, f) for f in sorted(files) if os.path.splitext(f)[1] in exts]
+    return out
+
+def test_kind(g, path):
+    import fnmatch
+    base = os.path.basename(path)
+    for kind in ("helper", "unit", "integration"):
+        if any(fnmatch.fnmatch(base, p_) for p_ in g["config"].get("test_kinds", {}).get(kind, [])):
+            return kind
+    return None
 
 # ---------------------------------------------------------------- timestamps
 def git_last(path):
@@ -287,7 +345,7 @@ def mtime_iso(path):
 
 def newest(paths):
     best = (None, "-")
-    for p in paths:
+    for p in dict.fromkeys(x.split("#", 1)[0] for x in paths):  # docs may carry a section anchor (D41 K2)
         if not os.path.exists(p):
             continue
         g = git_last(p)
@@ -321,6 +379,10 @@ def validate(g, want_schema=True, drift=True):
     cur = g.get("current_node")
     if cur is not None and cur not in ns:
         problems.append(f"current_node `{cur}` not in nodes")
+    systems = sorted(k for k, n in ns.items() if n.get("type") == "system")
+    if len(systems) > 1:
+        problems.append(f"more than one system node: {', '.join(systems)} (D38: at most one)")
+    class_ids = {c["id"] for c in g.get("config", {}).get("classes", [])}
     for k, n in ns.items():
         if n.get("id") != k:
             problems.append(f"key `{k}` != id `{n.get('id')}`")
@@ -343,8 +405,17 @@ def validate(g, want_schema=True, drift=True):
             for t in n.get(e, []):
                 if t in ns and ns[t]["type"] != "decision":
                     problems.append(f"{k}.{e} -> {t} is not a decision")
-        if n["type"] == "component" and n.get("part_of"):
-            problems.append(f"component `{k}` has part_of")
+        par = n.get("part_of", [None])[0]
+        ptype = ns[par]["type"] if par in ns else None
+        if n["type"] == "component" and (par and ptype != "system" or systems and not par):  # D38 P1
+            problems.append(f"component `{k}` must be part_of the system node" + (f" (is part_of `{par}`)" if par else "") if systems else f"component `{k}` has part_of but there is no system node")
+        if n["type"] == "requirement" and ptype != "system":
+            problems.append(f"requirement `{k}` must be part_of the system node (D38 P2)")
+        if n["type"] == "group":
+            if ptype not in ("component", "group"):
+                problems.append(f"group `{k}` must be part_of a component or a group (D38 P3)")
+            if "class" in n and n["class"] not in class_ids:
+                problems.append(f"group `{k}`.class `{n['class']}` is not a config.classes id")
         if len(n.get("part_of", [])) > 1:
             problems.append(f"{k}.part_of has {len(n['part_of'])} entries")
         _, cyc = parent_chain(ns, k)
@@ -354,11 +425,11 @@ def validate(g, want_schema=True, drift=True):
             if not any(r["type"] == n["type"] and re.match(r["id_pattern"], n["source_ref"]) for r in regs):
                 problems.append(f"{k}.source_ref `{n['source_ref']}` matches no registry of type {n['type']}")
         view_paths = {v["path"] for v in g.get("config", {}).get("views", [])}  # rendered right after an accepted save
-        for p in n.get("docs", []) + n.get("code_targets", []):
+        for p in [d.split("#", 1)[0] for d in n.get("docs", [])] + n.get("code_targets", []) + n.get("test_targets", []):  # docs may carry a section anchor (D41 K2)
             if not os.path.exists(p) and p not in view_paths:
                 problems.append(f"{k}: path missing `{p}`")
         if n["type"] != "component" and roots:
-            for c in n.get("code_targets", []):
+            for c in n.get("code_targets", []) + n.get("test_targets", []):
                 if not any(c.startswith(r) for r in roots):
                     problems.append(f"{k}: code_target `{c}` outside component roots")
         if n["type"] in ("decision", "issue") and not n.get("part_of") and not n.get("affects"):
@@ -451,6 +522,64 @@ def growth_candidates(g):
     ns = g["nodes"]; th = g["config"].get("growth_threshold", 5)
     return [(f, len(attached(ns, f)), th) for f, n in ns.items() if n["type"] in ("feature", "function") and len(attached(ns, f)) >= th]
 
+def regroup_candidates(g):
+    ns = g["nodes"]; th = g["config"].get("child_threshold", 7)
+    return [(k, len(structure_children(ns, k)), th) for k, n in sorted(ns.items()) if not hidden(n) and not in_plan(ns, k) and len(structure_children(ns, k)) > th]
+
+def structure_checks(g):
+    """D38-D42 findings as (severity, scope, finding); warnings and information only — nothing here blocks a write.
+    Plan steps are work items and are skipped; leaf checks apply to leaves that hold code (D39)."""
+    ns = g["nodes"]; cfg = g["config"]; out = []
+    live = {k: n for k, n in ns.items() if not hidden(n) and not in_plan(ns, k)}
+    for k, n in sorted(live.items()):  # D38 P4: dependency direction against the class ranks
+        for t in n.get("depends_on", []):
+            a, b = class_rank(g, k), class_rank(g, t) if t in ns else None
+            if a and b and a[1] < b[1]:
+                out.append(("warn", k, f"depends_on `{t}`: class `{a[0]}` (rank {a[1]}) depends on class `{b[0]}` (rank {b[1]}) — against the rank order (D38 P4)"))
+    for k, n in sorted(live.items()):  # D39 G3: code only on leaves
+        if n["type"] in ("group", "feature", "function") and n.get("code_targets") and structure_children(ns, k):
+            out.append(("warn", k, f"holds code_targets but has structure children — only leaves hold code (D39 G3)"))
+        if n["type"] == "group" and n.get("code_targets"):
+            out.append(("warn", k, "a group holds code_targets (D39 G3: never)"))
+    for k, c, th in regroup_candidates(g):  # D39 G4
+        out.append(("proposal", k, f"{c} structure children > child_threshold {th} — propose regrouping (D43)"))
+    leaves = [k for k in sorted(live) if code_leaf(ns, k)]
+    for k in leaves:  # D41 K3: every leaf needs a contract source
+        sec = entity_sections(ns[k]["file"]) if ns[k].get("file") and os.path.exists(ns[k]["file"]) else {}
+        resp = sec.get("Responsibility", "")
+        if not ns[k].get("docs") and (not resp or resp.startswith(NOT_RECORDED)):
+            out.append(("warn", k, "contract missing: no design document points here and the entity has no Responsibility (D41 K3)"))
+    exts = set(cfg.get("source_extensions", []))
+    if exts:  # D39 G6: code without a leaf, by name only (files are never read)
+        owned = [c for n in live.values() if n["type"] != "component" for c in n.get("code_targets", [])]
+        troots = cfg.get("test_roots", [])
+        loose = [f for r in component_roots(ns) if os.path.isdir(r) for f in list_files(r, exts) if not covered(f, owned) and not covered(f, troots) and not test_kind(g, f)]
+        if loose:
+            out.append(("info", "code without a leaf", f"{len(loose)} files under component roots (names only, D39 G6): " + ", ".join(loose)))
+    if cfg.get("test_roots") and exts:  # D42 T4: tests without a node; helpers are never test_targets
+        tt = [t for n in live.values() for t in n.get("test_targets", [])]
+        files = [f for r in cfg["test_roots"] if os.path.isdir(r) for f in list_files(r, exts)]
+        loose_t = [f for f in files if test_kind(g, f) in ("unit", "integration") and not covered(f, tt)]
+        unrule = [f for f in files if test_kind(g, f) is None and not covered(f, tt)]
+        if loose_t: out.append(("info", "tests without a node", f"{len(loose_t)} unit / integration test files (D42 T4): " + ", ".join(loose_t)))
+        if unrule: out.append(("info", "test files matching no rule", f"{len(unrule)} files under test_roots match no config.test_kinds pattern: " + ", ".join(unrule)))
+    tested_docs = {d.split("#", 1)[0] for n in live.values() if n.get("test_targets") for d in n.get("docs", [])}
+    for k in leaves:  # D42 T5: a leaf reached by no test
+        if not ns[k].get("test_targets") and not any(d.split("#", 1)[0] in tested_docs for d in ns[k].get("docs", [])):
+            out.append(("info", k, "no test reaches this leaf (neither its own test_targets nor a test on a node of its documents) (D42 T5)"))
+    for k, n in sorted(live.items()):  # D42 T3 / D41 K3: the caller states its expectations
+        if n["type"] not in ("group", "feature", "function", "component"): continue
+        exp = (entity_sections(n["file"]).get("Expectations", "") if n.get("file") and os.path.exists(n["file"]) else "")
+        for t in n.get("depends_on", []):
+            if t in ns and ns[t]["type"] in STRUCT_CHILD and not in_plan(ns, t) and not n.get("docs") and t not in exp:
+                out.append(("warn", k, f"depends_on `{t}` but states no expectation of it (no design document, no `{t}` in an Expectations section) (D42 T3)"))
+    for k, n in sorted(live.items()):  # D42 T5: contract newer than its tests
+        if n.get("test_targets"):
+            c = newest(n.get("docs") or ([n["file"]] if n.get("file") else [])); t = newest(n["test_targets"])
+            if c[0] and t[0] and newer(c[0], t[0]):
+                out.append(("warn", k, f"contract source changed {c[0]} ({c[1]}) after its tests {t[0]} ({t[1]}) — tests may lag the contract (D42 T5)"))
+    return out
+
 def fold_candidates(g):
     ns = g["nodes"]; ins = in_edges(ns); out = []
     for k, n in ns.items():
@@ -462,13 +591,14 @@ def fold_candidates(g):
     return out
 
 # ---------------------------------------------------------------- entities (plan integrity-store P1–P5)
-ENTITY_TYPES = ("decision", "issue", "plan", "rule")  # created with `add`; structure nodes get their file via `migrate` / `attach`
+ENTITY_TYPES = ("decision", "issue", "plan", "rule", "requirement")  # created with `add`; structure nodes get their file via `add-node` / `migrate` / `attach`
 ENTITY_DIR = "docs/entities"
 HEADINGS = {  # required sections per entity type, in order; "Log" is always last and append-only
     "decision": ["Statement", "Public summary", "User's words", "Reason", "Date"],
     "issue": ["Text", "Source"],
     "plan": ["Goal", "Approval"],
     "rule": ["Statement", "Source"],
+    "system": ["Purpose", "Premises", "Values"], "requirement": ["Statement", "Source"], "group": ["Summary", "Criterion"],  # D38
     "component": ["Summary"], "feature": ["Summary"], "function": ["Summary"], "task": ["Summary"],
 }
 NOT_RECORDED = "(not recorded in the source)"
@@ -623,9 +753,11 @@ def component_of(ns, k):
     if ns[k]["type"] == "component":
         return k
     chain, _ = parent_chain(ns, k)
-    top = chain[-1] if chain else None
-    if top and ns[top]["type"] == "component":
-        return top
+    comp = next((x for x in chain if ns[x]["type"] == "component"), None)  # under a system the top of the chain is the system (D38)
+    if comp:
+        return comp
+    if ns[k]["type"] in ("system", "requirement") or (chain and ns[chain[-1]]["type"] == "system"):
+        return "(system)"
     for a in ns[k].get("affects", []):  # issue attached by `affects` only
         if a in ns and a != k:
             return component_of(ns, a) if ns[a].get("part_of") or ns[a]["type"] == "component" else a
@@ -687,12 +819,20 @@ def components_table(ns):
                          ", ".join(f"`{d}`" for d in n["docs"]) or "—", n.get("wip_status", "—")))
     return table(["id", "name", "roots", "overview doc", "wip"], rows)
 
-SUBGRAPH_LEGEND = "Legend: one row per node; hop = shortest distance over all edge kinds in both directions (`rev-` = traversed against the arrow); `path from origin` = the first path found (BFS, ids sorted), other paths may exist; `(index)` = feature/function that has feature/function children."
+def system_table(ns):
+    """D38: the apex and its requirements, shown in every hydrate next to the components (the apex is never expanded by hops)."""
+    rows = []
+    for k, n in sorted(ns.items(), key=lambda x: (x[1]["type"] != "system", x[0])):
+        if n["type"] in ("system", "requirement") and not hidden(n):
+            rows.append((k, n["type"], n["name"], ", ".join(f"`{d}`" for d in n["docs"]) or "—", ", ".join(n.get("affects", [])) or "—", n.get("file", "—")))
+    return table(["id", "type", "name", "docs", "affects", "entity (read it)"], rows) if rows else None
+
+SUBGRAPH_LEGEND = "Legend: one row per node; hop = shortest distance over all edge kinds in both directions (`rev-` = traversed against the arrow); `path from origin` = the first path found (BFS, ids sorted), other paths may exist; `(index)` = group/feature/function that has structure children; the system node is reached but never expanded (D38)."
 
 def subgraph_table(ns, hop, why_col=False):
     rows = []
     for k, (h, path) in sorted(hop.items(), key=lambda x: (x[1][0], x[0])):
-        is_index = ns[k]["type"] in ("feature", "function") and any(m.get("part_of") == [k] and m["type"] in ("feature", "function") for m in ns.values())
+        is_index = ns[k]["type"] in ("group", "feature", "function") and bool(structure_children(ns, k))
         r = [h, k, ns[k]["type"] + (" (index)" if is_index else ""), ns[k].get("wip_status", "—"), path]
         if why_col:
             r.append("")
@@ -719,6 +859,8 @@ def cmd_hydrate(g, args):
     hist = {k for k in hop_all if k != origin and hidden(ns[k])}
     hop = hop_all if getattr(args, "history", False) else {k: v for k, v in hop_all.items() if k not in hist}
     print(f"## Impact Assessment Checklist — {origin}\n")
+    st_ = system_table(ns)
+    if st_: print("### System and requirements (always shown — D38)"); print(st_); print()
     print("### Components (always shown — R7)"); print(components_table(ns)); print()
     print("### Backlog (graph-wide, always shown — D33)"); print(backlog_md(g)); print()
     print("### Subgraph"); print(subgraph_table(ns, hop)); print(SUBGRAPH_LEGEND)
@@ -732,9 +874,10 @@ def cmd_hydrate(g, args):
             f = ns[k]["file"]
             st = "MISSING" if not os.path.exists(f) else ("exists" if sha256_of(f) == ns[k].get("sha256") else "exists — CHANGED OUTSIDE graph_tool")
             rows.append((k, "entity (the node's text)", f"`{f}`", st))
-        for kind in ("docs", "code_targets"):
+        for kind in ("docs", "code_targets", "test_targets"):
             for p in ns[k].get(kind, []):
-                st = "MISSING" if not os.path.exists(p) else ("exists (dir: read every file under it)" if os.path.isdir(p) else "exists")
+                fp = p.split("#", 1)[0]
+                st = "MISSING" if not os.path.exists(fp) else ("exists (dir: read every file under it)" if os.path.isdir(fp) else "exists" + (" (read the anchored section)" if "#" in p else ""))
                 rows.append((k, kind, f"`{p}`", st))
         if "source_ref" in ns[k] and not ns[k].get("file"):  # with an entity file the registry rows are already in its Copies
             regs = [r for r in g["config"].get("registries", []) if r["type"] == ns[k]["type"] and re.match(r["id_pattern"], ns[k]["source_ref"])]
@@ -803,6 +946,8 @@ def proposals(g, lang):
         lines.append(MSG["growth"][lang].format(n=f, c=c, t=t))
     for v, s, why in fold_candidates(g):
         lines.append(MSG["fold"][lang].format(v=v, s=s, why=why))
+    for k, c, t in regroup_candidates(g):
+        lines.append(MSG["regroup"][lang].format(n=k, c=c, t=t))
     return lines or [MSG["none"][lang]]
 
 def cmd_check(g, args):
@@ -814,6 +959,8 @@ def cmd_check(g, args):
     print("\n### Fold candidates"); print(table(["victim", "survivor", "why"], fold_candidates(g)))
     print("\n### Staleness — timestamp layer"); print(table(["node", "code last changed", "docs last changed", "finding"], timestamp_checks(ns, [k for k, n in sorted(ns.items()) if n["type"] not in ("decision", "issue")])))
     print("\n### Staleness — content layer (D24)"); print(table(["severity", "scope", "finding"], content_checks(g)))
+    print("\n### Structure model (D38–D42: rank direction, code only on leaves, regrouping, contracts, code / tests without a node, expectations, tests behind contracts)")
+    print(table(["severity", "scope", "finding"], structure_checks(g)))
     print("\n### Proposals (" + args.lang + ")")
     for l in proposals(g, args.lang): print("- " + l)
     return 0
@@ -897,9 +1044,10 @@ def cmd_lint_prose(g, args):
     return 1 if problems else 0
 
 def cmd_add_path(g, args):
-    ns = g["nodes"]; field = "docs" if args.cmd == "add-doc" else "code_targets"
+    ns = g["nodes"]; field = {"add-doc": "docs", "add-code": "code_targets", "add-test": "test_targets"}[args.cmd]
     if args.node not in ns: print(f"ERROR: `{args.node}` not in nodes"); return 1
-    if not os.path.exists(args.path): print(f"ERROR: path `{args.path}` does not exist"); return 1
+    if not os.path.exists(args.path.split("#", 1)[0]): print(f"ERROR: path `{args.path}` does not exist"); return 1
+    if field == "test_targets" and test_kind(g, args.path) == "helper": print(f"ERROR: `{args.path}` matches a helper rule (config.test_kinds.helper); helpers are never test_targets (D42 T4)"); return 1
     lst = ns[args.node].setdefault(field, [])
     if args.path not in lst: lst.append(args.path)
     b4 = md5(args.graph); guarded_save(args.graph, g); log_op(g, f"{args.cmd} {args.node} {args.path}", args.graph, b4)
@@ -910,8 +1058,16 @@ def cmd_add_node(g, args):
     ns = g["nodes"]
     if args.id in ns: print(f"ERROR: `{args.id}` exists"); return 1
     if not ID_RE.match(args.id): print(f"ERROR: bad id `{args.id}`"); return 1
-    if args.type not in ("component", "feature", "function", "decision", "issue", "task"): print("ERROR: bad type"); return 1
+    if args.type not in ("system", "requirement", "component", "group", "feature", "function", "decision", "issue", "task"): print("ERROR: bad type"); return 1
     n = {"id": args.id, "type": args.type, "name": args.name, "docs": args.doc or [], "code_targets": args.code or []}
+    if getattr(args, "test", None): n["test_targets"] = args.test
+    if getattr(args, "cls", None):
+        if args.type != "group": print("ERROR: --class is for group nodes only"); return 1
+        n["class"] = args.cls
+    given = {}
+    for spec in getattr(args, "section", None) or []:
+        if "=" not in spec: print(f"ERROR: --section wants Heading=text, got `{spec[:40]}`"); return 1
+        h, t = spec.split("=", 1); given[h.strip()] = t
     if args.part_of: n["part_of"] = [args.part_of]
     if args.source_ref: n["source_ref"] = args.source_ref
     if getattr(args, "status", None):
@@ -936,6 +1092,7 @@ def cmd_add_node(g, args):
             sec.update(reg)
             if differ: print(f"note: copies of {args.source_ref} differ ({', '.join(differ)}) — review, then `append {args.id}`")
         elif getattr(args, "summary", None): sec["Summary" if "Summary" in heads else heads[0]] = args.summary
+        sec.update({h: t for h, t in given.items() if t.strip()})  # --section: required headings and optional contract sections (D41 K3)
         os.makedirs(ENTITY_DIR, exist_ok=True)
         open(path, "w", encoding="utf-8").write(render_entity(args.id, args.type, args.name, sec, now_iso(), how="add-node"))
         n["file"] = path; n["sha256"] = sha256_of(path)
@@ -1421,6 +1578,7 @@ def drop_handover_path(g, args):
 
 def cmd_migrate(g, args):
     """Give every node without an entity file its file, mechanically and reproducibly (no judgment, no paraphrase)."""
+    if getattr(args, "add_system", False): return add_system(g, args)
     if getattr(args, "drop_handover_path", False): return drop_handover_path(g, args)
     if getattr(args, "restore_folds", False): return restore_folds(g, args)
     if getattr(args, "strip_graph_copies", False): return strip_graph_copies(g, args)
@@ -1578,6 +1736,143 @@ def cmd_close(g, args):
     print(f"{args.node}: {old} -> {args.state} (closed_by {n['closed_by']})" + (f"; added {dec}.resolves -> {args.node}" if dec else ""))
     return cmd_validate(g, args)
 
+def cmd_set_source_ref(g, args):
+    """u58: give a decision / issue its registry id after it exists; closed_by values that named the node move with it."""
+    ns = g["nodes"]
+    if args.node not in ns or ns[args.node]["type"] not in ("decision", "issue"): print(f"ERROR: `{args.node}` is not a decision / issue node"); return 1
+    n = ns[args.node]; old = n.get("source_ref", args.node); n["source_ref"] = args.ref; moved = []
+    if n["type"] == "decision":
+        for i in n.get("resolves", []):
+            if ns[i].get("closed_by") in (old, args.node): ns[i]["closed_by"] = args.ref; moved.append(i)
+    b4 = md5(args.graph); guarded_save(args.graph, g)
+    log_op(g, f"set-source-ref {args.node}: {old} -> {args.ref}" + (f"; closed_by moved on {', '.join(moved)}" if moved else ""), args.graph, b4)
+    print(f"{args.node}.source_ref: {old} -> {args.ref}" + (f"; closed_by -> {args.ref} on {', '.join(moved)}" if moved else ""))
+    return cmd_validate(g, args)
+
+def entity_log(ns, k, text, backup):
+    """Append a dated Log line to k's entity file (sha-checked); the old text goes to `backup` for a rollback."""
+    f = ns[k].get("file")
+    if not f: return
+    if sha256_of(f) != ns[k].get("sha256"): raise WriteRefused([f"`{f}` changed outside graph_tool — restore it first"])
+    cur = open(f, encoding="utf-8").read()
+    backup.setdefault(f, cur)
+    open(f, "w", encoding="utf-8").write(cur.rstrip("\n") + f"\n- {now_iso()} {text}\n"); ns[k]["sha256"] = sha256_of(f)
+
+def save_restructure(g, args, backup, line):
+    b4 = md5(args.graph)
+    try:
+        guarded_save(args.graph, g)
+    except WriteRefused:
+        for f, t in backup.items(): open(f, "w", encoding="utf-8").write(t)
+        raise
+    log_op(g, line, args.graph, b4)
+
+def cmd_move(g, args):
+    """D43 R1: change part_of in one validated step; the reason goes to both parents' entity logs."""
+    ns = g["nodes"]
+    for x in (args.node, args.parent):
+        if x not in ns: print(f"ERROR: `{x}` not in nodes"); return 1
+    if ns[args.node]["type"] not in STRUCT_CHILD + ("task",): print("ERROR: move is for structure nodes (component / group / feature / function / task); decisions and issues use add-edge / remove-edge"); return 1
+    old = ns[args.node].get("part_of", [None])[0]; backup = {}
+    ns[args.node]["part_of"] = [args.parent]
+    for k in dict.fromkeys(x for x in (old, args.parent) if x):
+        entity_log(ns, k, f"move: `{args.node}` {old} -> {args.parent} — {args.reason}", backup)
+    save_restructure(g, args, backup, f"move {args.node}: part_of {old} -> {args.parent} ({args.reason})")
+    print(f"moved `{args.node}`: {old} -> {args.parent}"); return cmd_validate(g, args)
+
+def cmd_group(g, args):
+    """D43 R2: insert a group / feature / function between a parent and some of its children."""
+    ns = g["nodes"]
+    if args.id in ns or not ID_RE.match(args.id): print(f"ERROR: `{args.id}` exists or is not a valid id"); return 1
+    if args.type not in ("group", "feature", "function"): print("ERROR: type must be group | feature | function"); return 1
+    if args.under not in ns: print(f"ERROR: `{args.under}` not in nodes"); return 1
+    bad = [c for c in args.children if c not in ns or ns[c].get("part_of") != [args.under]]
+    if bad: print(f"ERROR: not children of `{args.under}`: {', '.join(bad)}"); return 1
+    n = {"id": args.id, "type": args.type, "name": args.name, "docs": [], "code_targets": [], "part_of": [args.under]}
+    if args.cls:
+        if args.type != "group": print("ERROR: --class is for group nodes only"); return 1
+        n["class"] = args.cls
+    heads = HEADINGS[args.type]; sec = {h: NOT_RECORDED for h in heads}
+    if args.summary: sec[heads[0]] = args.summary
+    if args.criterion and "Criterion" in heads: sec["Criterion"] = args.criterion
+    path = os.path.join(ENTITY_DIR, f"{args.id}.md")
+    if os.path.exists(path): print(f"ERROR: `{path}` already exists"); return 1
+    os.makedirs(ENTITY_DIR, exist_ok=True)
+    open(path, "w", encoding="utf-8").write(render_entity(args.id, args.type, args.name, sec, now_iso(), how="group"))
+    n["file"] = path; n["sha256"] = sha256_of(path); ns[args.id] = n
+    for c in args.children: ns[c]["part_of"] = [args.id]
+    backup = {}
+    try:
+        entity_log(ns, args.under, f"group: `{args.id}` inserted over {', '.join(args.children)} — {args.reason}", backup)
+        save_restructure(g, args, backup, f"group {args.id} ({args.type}) under {args.under} over {', '.join(args.children)} ({args.reason})")
+    except WriteRefused:
+        os.remove(path); raise
+    print(f"inserted `{args.id}` under `{args.under}` over {len(args.children)} children"); return cmd_validate(g, args)
+
+def cmd_dissolve(g, args):
+    """D43 R3: the node's structure children go to its parent; the node stays as hidden history (FOLDED). Every other
+    reference to it (attached decisions / issues, depends_on, affects) and its own docs / code / tests must be mapped
+    explicitly; the command refuses while one is unmapped and changes nothing."""
+    ns = g["nodes"]; k = args.node
+    if k not in ns or ns[k]["type"] not in ("group", "feature", "function") or hidden(ns[k]): print(f"ERROR: `{k}` is not a live group / feature / function"); return 1
+    parent = ns[k].get("part_of", [None])[0]
+    if not parent: print(f"ERROR: `{k}` has no parent to receive its children"); return 1
+    mp = {}
+    for spec in args.map or []:
+        if "=" not in spec: print(f"ERROR: --map wants <referrer>=<new-target>, got `{spec}`"); return 1
+        a, b = spec.split("=", 1); mp[a] = b
+    kids = structure_children(ns, k)
+    refs = sorted(j for j, m in ns.items() if j != k and j not in kids and any(k in m.get(e, []) for e in EDGES))
+    own = {"docs": args.docs_to, "code_targets": args.code_to, "test_targets": args.tests_to}
+    flag = {"docs": "--docs-to", "code_targets": "--code-to", "test_targets": "--tests-to"}
+    unmapped = [f"{j} (refers to `{k}` by {', '.join(e for e in EDGES if k in ns[j].get(e, []))})" for j in refs if j not in mp] + \
+               [f"own {f_} ({len(ns[k][f_])} paths) — give {flag[f_]} <node>" for f_, to in own.items() if ns[k].get(f_) and not to]
+    bad = [f"{a}={b}" for a, b in list(mp.items()) + [(f_, t) for f_, t in own.items() if t] if b not in ns or b == k]
+    if unmapped or bad:
+        print(f"## dissolve {k} — refused, nothing changed")
+        if unmapped: print("Unmapped (map each with --map <referrer>=<new-target>, own fields with --docs-to / --code-to / --tests-to):"); [print(f"- {u}") for u in unmapped]
+        if bad: print("Unknown targets: " + ", ".join(bad))
+        return 1
+    for j in kids: ns[j]["part_of"] = [parent]
+    for j, t in mp.items():
+        for e in EDGES:
+            if k in ns[j].get(e, []): ns[j][e] = list(dict.fromkeys(t if x == k else x for x in ns[j][e]))
+    for f_, to in own.items():  # one place per fact: the paths move, the dissolved node keeps none
+        if to and ns[k].get(f_):
+            ns[to][f_] = list(dict.fromkeys(ns[to].get(f_, []) + ns[k][f_]))
+            ns[k][f_] = []
+    ns[k].pop("test_targets", None); ns[k]["wip_status"] = "FOLDED"; ns[k].pop("next", None)
+    if g.get("current_node") == k: g["current_node"] = parent
+    backup = {}
+    entity_log(ns, parent, f"dissolve: `{k}` dissolved, children {', '.join(kids) or 'none'} moved here — {args.reason}", backup)
+    entity_log(ns, k, f"dissolved into `{parent}` (kept as hidden history, D43) — {args.reason}", backup)
+    save_restructure(g, args, backup, f"dissolve {k} -> {parent}: children {', '.join(kids) or 'none'}; mapped {', '.join(f'{a}={b}' for a, b in mp.items()) or 'none'} ({args.reason})")
+    print(f"dissolved `{k}`: {len(kids)} children moved to `{parent}`; kept as hidden history"); return cmd_validate(g, args)
+
+def add_system(g, args):
+    """D38 P6: existing graphs gain the apex — one system node, every component part_of it."""
+    ns = g["nodes"]
+    if any(n["type"] == "system" for n in ns.values()): print("nothing to do: a system node exists"); return 0
+    sid = args.system_id or "system"; name = args.system_name
+    if not name: print("ERROR: give --system-name \"<name>\""); return 1
+    if sid in ns or not ID_RE.match(sid): print(f"ERROR: `{sid}` exists or is not a valid id"); return 1
+    comps = sorted(k for k, n in ns.items() if n["type"] == "component")
+    print("## migrate --add-system" + (" --dry-run" if args.dry_run else "")); print(table(["node", "change"], [(sid, "new system node")] + [(c, f"part_of -> {sid}") for c in comps]))
+    if args.dry_run: return 0
+    path = os.path.join(ENTITY_DIR, f"{sid}.md")
+    if os.path.exists(path): print(f"ERROR: `{path}` already exists"); return 1
+    os.makedirs(ENTITY_DIR, exist_ok=True)
+    open(path, "w", encoding="utf-8").write(render_entity(sid, "system", name, {h: NOT_RECORDED for h in HEADINGS["system"]}, now_iso(), how="migrate --add-system"))
+    ns[sid] = {"id": sid, "type": "system", "name": name, "docs": [], "code_targets": [], "file": path, "sha256": sha256_of(path)}
+    for c in comps: ns[c]["part_of"] = [sid]
+    b4 = md5(args.graph)
+    try:
+        guarded_save(args.graph, g)
+    except WriteRefused:
+        os.remove(path); raise
+    log_op(g, f"migrate --add-system: {sid} over {', '.join(comps)}", args.graph, b4)
+    print(f"added `{sid}`; fill Purpose / Premises / Values with `append {sid} \"<text>\" --section <Heading>`"); return cmd_validate(g, args)
+
 # ---------------------------------------------------------------- main
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1592,9 +1887,14 @@ def main(argv=None):
     sp("validate"); sp("gate"); sp("hydrate", "node"); sp("check")
     sp("fold", "victim", "survivor"); sp("split", "node", "children", nargs="+")
     sp("set-status", "node", "status"); sp("add-edge", "src", "kind", "dst"); sp("remove-edge", "src", "kind", "dst"); sp("set-current", "node"); sp("lint-prose")
-    sp("add-doc", "node", "path"); sp("add-code", "node", "path")
+    sp("add-doc", "node", "path"); sp("add-code", "node", "path"); sp("add-test", "node", "path")
     p = sp("add-node", "id", "type", "name"); p.add_argument("--part-of", dest="part_of"); p.add_argument("--doc", action="append"); p.add_argument("--code", action="append"); p.add_argument("--source-ref", dest="source_ref"); p.add_argument("--status")
     p.add_argument("--next", action="store_true"); p.add_argument("--owner", choices=["user", "claude"]); p.add_argument("--trigger"); p.add_argument("--summary")
+    p.add_argument("--test", action="append"); p.add_argument("--class", dest="cls"); p.add_argument("--section", action="append")
+    sp("set-source-ref", "node", "ref")
+    p = sp("move", "node", "parent"); p.add_argument("--reason", required=True)
+    p = sp("group", "id", "type", "name"); p.add_argument("--under", required=True); p.add_argument("children", nargs="+"); p.add_argument("--class", dest="cls"); p.add_argument("--summary"); p.add_argument("--criterion"); p.add_argument("--reason", required=True)
+    p = sp("dissolve", "node"); p.add_argument("--map", action="append"); p.add_argument("--docs-to", dest="docs_to"); p.add_argument("--code-to", dest="code_to"); p.add_argument("--tests-to", dest="tests_to"); p.add_argument("--reason", required=True)
     p = sp("backlog"); p.add_argument("--owner", choices=["user", "claude"]); p.add_argument("--next-only", dest="next_only", action="store_true"); p.add_argument("--component"); p.add_argument("--all", action="store_true")
     p = sp("set-next", "node"); p.add_argument("--off", action="store_true")
     p = sp("set-issue", "node"); p.add_argument("--owner", choices=["user", "claude"]); p.add_argument("--trigger")
@@ -1606,6 +1906,7 @@ def main(argv=None):
     p = sp("attach", "node"); p.add_argument("--section", action="append"); p.add_argument("--as-plan", dest="as_plan", action="store_true")
     p = sp("render"); p.add_argument("--check", action="store_true")
     p = sp("migrate"); p.add_argument("--dry-run", dest="dry_run", action="store_true"); p.add_argument("--plans", action="store_true"); p.add_argument("--retire-registry", dest="retire_registry", metavar="FILE"); p.add_argument("--strip-graph-copies", dest="strip_graph_copies", action="store_true"); p.add_argument("--restore-folds", dest="restore_folds", action="store_true"); p.add_argument("--drop-handover-path", dest="drop_handover_path", action="store_true")
+    p.add_argument("--add-system", dest="add_system", action="store_true"); p.add_argument("--system-id", dest="system_id"); p.add_argument("--system-name", dest="system_name")
     p = sp("rename", "node", "name")
     p = sp("config", "action"); p.add_argument("key", nargs="?"); p.add_argument("value", nargs="?")
     for name, a in ap._subparsers._group_actions[0].choices.items():
@@ -1625,7 +1926,8 @@ def main(argv=None):
       rc = {"validate": cmd_validate, "gate": cmd_gate, "uninstall": cmd_uninstall, "hydrate": cmd_hydrate, "check": cmd_check,
           "fold": cmd_fold, "split": cmd_split, "set-status": cmd_set_status, "add-edge": cmd_add_edge, "remove-edge": cmd_remove_edge, "set-current": cmd_set_current,
           "add-node": cmd_add_node, "lint-prose": cmd_lint_prose,
-          "add-doc": cmd_add_path, "add-code": cmd_add_path, "backlog": cmd_backlog, "set-next": cmd_set_next,
+          "add-doc": cmd_add_path, "add-code": cmd_add_path, "add-test": cmd_add_path, "set-source-ref": cmd_set_source_ref,
+          "move": cmd_move, "group": cmd_group, "dissolve": cmd_dissolve, "backlog": cmd_backlog, "set-next": cmd_set_next,
           "set-issue": cmd_set_issue, "close": cmd_close, "add": cmd_add, "append": cmd_append, "attach": cmd_attach, "migrate": cmd_migrate, "rename": cmd_rename, "config": cmd_config, "render": cmd_render}[args.cmd](g, args)
     except WriteRefused as e:
         print("## write refused — the graph would be invalid; nothing was written (U31)")
