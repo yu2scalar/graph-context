@@ -1,6 +1,6 @@
 ---
 name: init
-description: Create or refresh dependency_graph.json: analyse the project, recommend and ask for config (design root, registries, language, components), derive the graph from design docs and registries. Idempotent. Flags: --reconfigure, --reset-structure. Part of the `graph` plugin.
+description: Create or refresh dependency_graph.json: analyse the project, recommend and ask for config (design root, registries, language, components, classes read from the project's own documents, leaf unit, test naming), derive the tree system → component → group → feature → leaf (one class) from design docs and registries, and report the discrepancies between documents and code. Idempotent. Flags: --reconfigure, --reset-structure. Part of the `graph` plugin.
 arguments: [flags]
 ---
 

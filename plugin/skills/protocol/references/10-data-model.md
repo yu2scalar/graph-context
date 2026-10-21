@@ -17,6 +17,12 @@
 | `registries[]` | `[]` | `{type: decision\|issue, id_pattern: <regex>, file: <path>, public_column?: <n>}` — how ids in existing registers are recognised; the register row is copied verbatim into the entity file (`add-node --source-ref`, `migrate`) |
 | `views[]` | absent | `{kind: decisions\|public-decisions\|issues\|current\|plans, path: <path>}` — documents generated from the graph and entity files on every accepted write |
 | `growth_threshold` | 5 | attached decision+issue count at which a split is proposed |
+| `classes[]` | absent | `{id, label, rank, source?}` — classes of the structure read from the project's own criteria document (D38); a `depends_on` from a lower rank to a higher rank is warned by `check` |
+| `leaf_unit` | absent | `class` \| `module` \| `package` — what one leaf stands for (D39) |
+| `source_extensions` | absent | e.g. `[".java"]`; source files under component roots without a leaf are listed by name (D39 G6) |
+| `child_threshold` | 7 | structure children above which regrouping is proposed (D39 G4, D43) |
+| `test_roots` | absent | directories that hold tests (D42 T4) |
+| `test_kinds` | absent | `{unit, integration, helper}`: fnmatch rules on the file name (D42 T2); helpers are never `test_targets` |
 | `backlog_filter` | absent (= all open issues) | `{owner: user\|claude, next_only: bool, component: <id>}` — project default for which open issues the Backlog lists; excluded ones are counted per component; command options override (D33) |
 | `install` | set by install | `{installed_at, skill_version, claude_md_sha256_before, gitignore_sha256_before}` |
 
@@ -26,18 +32,20 @@ Deliberately absent: `code_roots` (derived: union of component nodes' `code_targ
 | Field | Required | Type | Definition |
 |-------|----------|------|------------|
 | `id` | yes | `^[a-z0-9][a-z0-9_-]*$` | equals the key in `nodes` |
-| `type` | yes | enum | `component` \| `feature` \| `function` \| `decision` \| `issue` \| `plan` \| `rule` \| `task` (plan: what was planned, its steps are nodes `part_of` it; rule: a working rule set by the user; task: manual only, never generated) |
+| `type` | yes | enum | `system` \| `requirement` \| `component` \| `group` \| `feature` \| `function` \| `decision` \| `issue` \| `plan` \| `rule` \| `task` (system: the apex, at most one; requirement: a binding premise under it; group: a classification node, no code; plan: what was planned, its steps are nodes `part_of` it; rule: a working rule set by the user; task: manual only, never generated) |
 | `name` | yes | string | human name |
 | `docs` | yes | path[] | documents describing the node; may be empty |
-| `code_targets` | yes | path[] | files/dirs the node owns. component: its root dir(s). others: must fall under some component's roots |
-| `part_of` | no | nodeId[] ≤ 1 | parent. feature→component; function→feature/function; decision/issue→where attached. Components have none |
+| `code_targets` | yes | path[] | files/dirs the node owns. component: its root dir(s). others: must fall under some component's roots; only leaves should hold code (D39) |
+| `test_targets` | no | path[] | test files of a structure node (D42): class-named unit tests on the leaf, behaviour tests on the node of the document they verify |
+| `class` | no | nodeId | group only: the `config.classes` id it stands for (D38) |
+| `part_of` | no | nodeId[] ≤ 1 | parent. component→system (when one exists); requirement→system; group→component/group; feature→component/group; function→feature/function; decision/issue→where attached. The system has none |
 | `depends_on` | no | nodeId[] | prerequisite / expectation (incl. cross-component: → providing component's function) ; issue→decision that raised it |
-| `affects` | no | nodeId[] | decision/issue → component/feature/function it constrains or impacts |
+| `affects` | no | nodeId[] | decision/issue/requirement → structure node it constrains or impacts |
 | `resolves` | no | nodeId[] | decision → issue only |
 | `supersedes` | no | nodeId[] | decision → decision only; the target is replaced (fold candidate) |
 | `refines` | no | nodeId[] | decision → decision only; the target stays in force (never a fold candidate, u46) |
 | `source_ref` | no | string | registry id verbatim (`D-022`, `TBD-24`); decision/issue only; single-valued |
-| `wip_status` | no | enum | `PLANNED` \| `IN_PROGRESS` \| `BLOCKED` \| `DONE` \| `FOLDED`; `PLANNED` = not-yet-started plan step (D33, D34 R-b); on decisions the implementation state, `FOLDED` = absorbed by the superseding decision, hidden history (D31, D37; set only by `fold`); never on issue nodes |
+| `wip_status` | no | enum | `PLANNED` \| `IN_PROGRESS` \| `BLOCKED` \| `DONE` \| `FOLDED`; `PLANNED` = not-yet-started plan step (D33, D34 R-b); on decisions the implementation state, `FOLDED` = absorbed by the superseding decision, hidden history (D31, D37; set only by `fold`); on a group / feature / function `FOLDED` = dissolved, hidden history (D43; set only by `dissolve`); never on issue nodes |
 | `next` | no | bool | the item to take up next (D33); feature/function/task/issue only |
 | `issue_status` | issue: yes | enum | `open` \| `resolved` \| `transferred`; issue only |
 | `owner` | no | enum | `user` \| `claude` — who resolves the issue; issue only |
@@ -47,7 +55,10 @@ Deliberately absent: `code_roots` (derived: union of component nodes' `code_targ
 | `closed_by` | when not open | string | decision id, commit hash or short action text that closed the issue; issue only |
 
 ## Hierarchy and growth
-Root → component → feature → function. A feature starts as one node; when attached decisions+issues reach
+Root → system → component → group → feature → function (D38, D39): the system holds purpose, premises and values
+with requirement nodes under it; groups classify by the project's own criteria; a leaf (a feature / function without
+structure children that holds code) is exactly one class / module / package. Restructuring: `move`, `group`,
+`dissolve` (D43). A feature starts as one node; when attached decisions+issues reach
 `growth_threshold`, or a decision applies to only part of it, handover proposes splitting into `function`
 children and the parent becomes an index node (proposal at `/graph:handover`, applied on approval). A superseded decision is folded into the surviving
 decision on approval: it stays as a node with `wip_status: FOLDED`, linked by the survivor's `supersedes`, hidden by default
@@ -56,4 +67,5 @@ decision on approval: it stays as a node with `wip_status: FOLDED`, linked by th
 ## Invariants enforced by the skill (R1), not expressible in JSON Schema
 key == id · every edge target exists · no self-edges · `part_of` acyclic · `resolves` decision→issue (target `issue_status: resolved`) ·
 `supersedes` / `refines` decision→decision · `source_ref` matches a registry pattern when registries exist ·
-non-component `code_targets` under some component's roots.
+non-component `code_targets` and `test_targets` under some component's roots · at most one system; when it exists every
+component is part_of it · requirement part_of the system · group part_of a component or group, `class` a configured id.

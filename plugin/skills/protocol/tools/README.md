@@ -12,14 +12,14 @@
 | `validate` | no | JSON Schema (if `jsonschema` is installed) + every R1 rule; exit 1 on errors |
 | `gate` | no | completion gate (D30): FAIL (exit 1) on an uncommitted tree (untracked files included), `current_node` unset or missing while PLANNED / IN_PROGRESS / BLOCKED nodes exist, an open issue without owner + trigger, no `next` while work is pending, validate errors (incl. view drift), content-layer errors; WARN only for commits in the link set (unpushed `@{u}..HEAD`, else the last 20) that name no node / registry id. Writes nothing, logs nothing |
 | `hydrate <node_id>` | `current_node` (nothing when unchanged, u48) | full Impact Assessment Checklist for the node (hops 0–2 over all edge kinds, both directions) |
-| `check` | no | growth candidates, fold candidates, staleness (timestamp + D24 content layer), proposals (`--lang ja`) |
+| `check` | no | growth candidates, fold candidates, staleness (timestamp + D24 content layer), the Structure model section (D38, D39, D41, D42: dependencies against the class ranks, code on non-leaves, regrouping above `child_threshold`, leaves without a contract source, code files without a leaf and test files without a node — listed by name, never read —, untested leaves, `depends_on` without stated expectations, contracts newer than their tests; plan steps and leaves without code are skipped), proposals (`--lang ja`) |
 | `fold <victim> <survivor>` | yes | fold a superseded decision into the survivor: the victim is kept as a hidden history node (`wip_status: FOLDED`, survivor `supersedes` it); resolved issues need no fold (hidden by status) |
 | `hydrate --history <node>` | current_node | hydrate including hidden history (folded decisions, resolved issues) |
 | `migrate --restore-folds` | yes | legacy graphs: bring back every node an old delete-fold removed, from the survivor's Folded copies, as hidden history; drop `folded[]` |
 | `migrate --drop-handover-path [--dry-run]` | yes | D30: remove the retired `config.handover_path`; move `graph_tool.log` to `.context/graph_tool.log` when it lived elsewhere; the old handover file is reported, never deleted |
 | `split <node> <child>=<id,id> …` | yes | create `function` children under a feature and move attachments, then validate |
 | `set-status <node> <PLANNED\|IN_PROGRESS\|BLOCKED\|DONE\|none>` | yes | change `wip_status` (not on issues), then validate |
-| `add <id> <decision\|issue\|plan\|rule> "<name>" [--part-of P] [--owner O --trigger T] --section 'Heading=text' … (--new-not-duplicate "<why>" \| --duplicate-of <id>)` | yes | search before add (P4): lists every existing entity of that type + similarity top 5; writes nothing until the outcome is stated; then creates `docs/entities/<id>.md` (fixed headings, Log last) and the node (`file`, `sha256`) together |
+| `add <id> <decision\|issue\|plan\|rule\|requirement> "<name>" [--part-of P] [--source-ref ID] [--owner O --trigger T] --section 'Heading=text' … (--new-not-duplicate "<why>" \| --duplicate-of <id>)` | yes | search before add (P4): lists every existing entity of that type + similarity top 5; writes nothing until the outcome is stated; then creates `docs/entities/<id>.md` (fixed headings, Log last) and the node (`file`, `sha256`) together |
 | `append <id> "<text>"` | yes | entity files are append-only: adds a dated line under `## Log`; refuses when the file was edited outside the tool |
 | `migrate [--dry-run]` | yes | gives every node without an entity file its file, mechanically (reproducible: same input → same files): decision / issue text = the row of the first matching registry in `config.registries` order, every other copy (table rows and `- <ID> ` list items in registries + `docs_scope`) verbatim with file:line, folded ids' copies, 「…」 quotes collected, `Public summary` from the registry with `public_column`; missing sections say "(not recorded in the source)"; ids whose copies differ are listed for review |
 | `attach <id> --section … [--as-plan]` | yes | give one existing node its entity file from given sections (`--as-plan` turns a feature / function into a plan) |
@@ -33,9 +33,14 @@
 | `add-edge <src> <kind> <dst>` | yes | add one edge (`part_of`, `depends_on`, `affects`, `resolves`, `supersedes`, `refines`), then validate; an existing edge is reported unchanged and not logged |
 | `remove-edge <src> <kind> <dst>` | yes | remove one edge, then validate (e.g. a `supersedes` that only meant `refines`, u46) |
 | `set-current <node\|null>` | yes | set `current_node`, then validate |
-| `add-node <id> <type> "<name>" [--part-of P] [--doc F]… [--code F]… [--source-ref ID] [--status S] [--next] [--owner O] [--trigger T]` | yes | create a node **and its entity file** (decision / issue with `--source-ref`: sections copied verbatim from the matching registry row, as `migrate` does, and refused when no registry row exists — u49; otherwise `--summary` text or "(not recorded in the source)"; issue nodes start with `issue_status: open`; `--owner`/`--trigger` issue only), then validate |
+| `add-node <id> <type> "<name>" [--part-of P] [--doc F[#section]]… [--code F]… [--test F]… [--class C] [--section 'Heading=text']… [--source-ref ID] [--status S] [--next] [--owner O] [--trigger T]` | yes | create a node **and its entity file** (decision / issue with `--source-ref`: sections copied verbatim from the matching registry row, as `migrate` does, and refused when no registry row exists — u49; otherwise `--summary` text or "(not recorded in the source)"; issue nodes start with `issue_status: open`; `--owner`/`--trigger` issue only), then validate |
 | `lint-prose` | no | version strings and `Dx–Dy` ranges in SKILL.md, README, references, delegates vs plugin.json and the decision register (marketplace.json is scanned but carries no version); lists every string checked (U15). Not covered: prose naming sub-commands/features |
-| `add-doc <node> <path>` / `add-code <node> <path>` | yes | append to `docs` / `code_targets`, then validate |
+| `add-doc <node> <path[#section]>` / `add-code <node> <path>` / `add-test <node> <path>` | yes | append to `docs` (a section anchor is allowed, D41) / `code_targets` / `test_targets` (D42; a file matching `config.test_kinds.helper` is refused), then validate |
+| `set-source-ref <node> <ID>` | yes | give a decision / issue its registry id after it exists; `closed_by` values that named the node move with it (u58) |
+| `move <node> <new-parent> --reason T` | yes | change `part_of` of a structure node in one validated step; the reason is logged in both parents' entity files (D43 R1) |
+| `group <id> <group\|feature\|function> "<name>" --under <parent> <child> … --reason T [--class C] [--summary T] [--criterion T]` | yes | insert a node between a parent and some of its children (D43 R2) |
+| `dissolve <node> --reason T [--map <referrer>=<target> …] [--docs-to N] [--code-to N] [--tests-to N]` | yes | the node's structure children go to its parent; the node stays as hidden history (`FOLDED`); every other reference and its own paths must be mapped, otherwise the command lists them and changes nothing (D43 R3) |
+| `migrate --add-system --system-name "<name>" [--system-id ID] [--dry-run]` | yes | existing graphs: add the `system` apex and put every component under it (D38 P6) |
 | `hydrate --dry-run <node>` | no | full checklist without writing `current_node` (for reviews) |
 
 `--lang ja|en` may be given before or after the sub-command; the default is `config.interaction_language`.
@@ -47,4 +52,6 @@ Timestamps are seconds-precision and compared as datetimes (git commit time for 
 Dependencies: Python 3.8+, standard library. `jsonschema` is optional (schema layer is skipped with a warning).
 Test: `python3 test_graph_tool.py` (synthetic graph; exercises validate, hops, growth, fold, split, content layer, add-node,
 add-doc, set-status, gate (test_gate), hydrate --dry-run, backlog filter + excluded counts, set-next,
-set-issue, close by decision / by action, the resolves → issue_status invariant).
+set-issue, close by decision / by action, the resolves → issue_status invariant; test_structure_model: system / requirement /
+group invariants, the Structure model findings, add-test, add-node --section, group, move, dissolve refusal and success,
+set-source-ref, migrate --add-system, hydrate with the system table).

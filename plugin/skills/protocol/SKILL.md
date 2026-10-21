@@ -6,7 +6,7 @@ description: Graph-based project context management (protocol skill of the `grap
 # graph-context
 
 > Status: **v3.3.0-dev.9** (2026-09-28) — the pointer is the handover: entity files, generated views, issues as nodes, completion gate, fold hides. What changed and why: the decision register `references/40-decision-register.md`.
-> Long-form material (full data model, public decision register D1–D37) lives in `${CLAUDE_PLUGIN_ROOT}/skills/protocol/references/`.
+> Long-form material (full data model, public decision register D1–D43) lives in `${CLAUDE_PLUGIN_ROOT}/skills/protocol/references/`.
 
 ## Purpose
 
@@ -33,7 +33,7 @@ reaches everything from there. No handover document is written; `/graph:handover
 | `docs/entities/<id>.md` | One entity file per node: the node's text (decisions, issues, plans, rules, summaries of structure nodes). Written by `graph_tool.py` only, append-only (see Store). |
 | every `config.views[].path` | Generated documents people read (decision register, issue register, current specification, plans, public register). Re-rendered on every accepted write; never edited by hand. |
 | `.context/graph_tool.log` | Operations log: one line per accepted write (graph md5 before → after). |
-| `${CLAUDE_PLUGIN_ROOT}/skills/protocol/tools/graph_tool.py` | **The executable protocol (D26).** Every write to the store goes through it (R12). Commands by group — footprint: `install`, `uninstall` (both with `--dry-run`); read-only: `validate`, `gate`, `check`, `backlog`, `lint-prose`, `hydrate --dry-run`, `config get`, `render --check`; entities: `add`, `append`, `attach`, `rename`, `add-node`; structure and state: `hydrate <node>` (current_node), `set-current`, `set-status`, `set-next`, `set-issue`, `close`, `add-edge`, `remove-edge`, `add-doc`, `add-code`, `fold`, `split`, `config set`, `render`; migration: `migrate [--plans \| --retire-registry F \| --strip-graph-copies \| --restore-folds \| --drop-handover-path]`. Every number, id, hop, path status and timestamp shown to the user comes from this tool (R9). Full reference: `tools/README.md`. |
+| `${CLAUDE_PLUGIN_ROOT}/skills/protocol/tools/graph_tool.py` | **The executable protocol (D26).** Every write to the store goes through it (R12). Commands by group — footprint: `install`, `uninstall` (both with `--dry-run`); read-only: `validate`, `gate`, `check`, `backlog`, `lint-prose`, `hydrate --dry-run`, `config get`, `render --check`; entities: `add`, `append`, `attach`, `rename`, `add-node`, `set-source-ref`; structure and state: `hydrate <node>` (current_node), `set-current`, `set-status`, `set-next`, `set-issue`, `close`, `add-edge`, `remove-edge`, `add-doc`, `add-code`, `add-test`, `fold`, `split`, `move`, `group`, `dissolve`, `config set`, `render`; migration: `migrate [--plans \| --retire-registry F \| --strip-graph-copies \| --restore-folds \| --drop-handover-path \| --add-system]`. Every number, id, hop, path status and timestamp shown to the user comes from this tool (R9). Full reference: `tools/README.md`. |
 | `${CLAUDE_PLUGIN_ROOT}/skills/protocol/schema/graph_schema.json` | JSON Schema, draft 2020-12. Authoritative for shapes. Shipped in the plugin, never copied into the project. |
 | `${CLAUDE_PLUGIN_ROOT}/skills/protocol/templates/graph_context.template.json` | Minimal valid seed graph. |
 | `${CLAUDE_PLUGIN_ROOT}/skills/protocol/references/` | Full data model, public decision register, sync notes. |
@@ -41,14 +41,45 @@ reaches everything from there. No handover document is written; `/graph:handover
 
 ## Data model (summary; schema is authoritative)
 
+**Terms (D40)**: a **Node** is the unit that holds information in the graph; an **Edge** is a relation between two
+nodes; the **Entity file** `docs/entities/<id>.md` is a node's text. Source code with its doc comments is called code.
+
 **Root** is closed: `current_node`, `nodes`, `config` only.
 
-**Hierarchy**: Root → `component` → `feature` → `function`. `decision` and `issue` nodes attach to a
-component, feature or function. A `plan` is attached (`part_of`) to the feature or function it plans; its steps
-are `function` nodes `part_of` the plan (R11). A `rule` is a working rule set by the user. `task` exists for
-manual use and is never generated.
+**Hierarchy (D38, D39)**: Root → `system` → `component` → `group` → `feature` → `function`, read top-down as a
+functional decomposition.
+- `system` (at most one) is the apex: the system's purpose, premises (invariants) and values; its `docs` are the
+  overview documents. `requirement` nodes sit under it and `affects` the nodes they constrain. hydrate always shows
+  both and never expands through the system node.
+- `component` = a deployable / buildable unit (its `code_targets` are its root directories), `part_of` the system.
+- `group` = a classification node with no code of its own (e.g. common / backend-specific). Its `class` names an entry
+  of `config.classes`, which is **read from the project's own design documents** (the document that states the
+  criteria), never invented; groups may nest when the project's documents nest (e.g. layers). Optional for small
+  components.
+- `feature` = one design document (or one top-level section of it); `function` = a part of it. A `feature` /
+  `function` without structure children that holds code is a **leaf**: exactly one class (or module / package, per
+  `config.leaf_unit`), small types included — DTOs and exceptions are leaves of their own; the parent gives the overview.
+  Only leaves hold `code_targets` (a node with children is an index node).
+- `decision` and `issue` nodes attach to the structure. A `plan` is attached (`part_of`) to what it plans; its steps
+  are `function` nodes `part_of` the plan (R11) — work items, not structure. A `rule` is a working rule set by the
+  user. `task` exists for manual use and is never generated.
 
-**Node fields**: required `id`, `type`, `name`, `docs[]`, `code_targets[]`. Optional edges:
+**Contract (D41)**: a node's contract is what must be decided before the code **and** cannot be read from it —
+responsibility, promises (inputs / outputs / errors), invariants, boundaries (what it must not do), acceptance
+criteria, expectations of each `depends_on` target. Where a design document states it, the document is the contract
+and the node's `docs` point to it, with a section anchor when the section matters (`docs/design/x.md#2`); one
+document section may be pointed to by several leaves and one leaf may point to several sections. The entity file
+holds contract sections (`Responsibility`, `Promises`, `Invariants`, `Boundaries`, `Acceptance criteria`,
+`Expectations`) only for what no document states. Nothing is copied from documents into entities, and method lists,
+algorithms and fields are never written as contract. The divergence between documents and code is kept on purpose:
+it is what the staleness checks find.
+
+**Tests (D42)**: `test_targets` on structure nodes. A unit test named after one class goes on that leaf; a behaviour
+or integration test goes on the node of the design document it verifies (from the project's own mapping table when
+one exists). The kind comes from `config.test_kinds` naming rules; helpers and fixtures are never `test_targets`.
+
+**Node fields**: required `id`, `type`, `name`, `docs[]`, `code_targets[]`; optional `test_targets[]` (structure
+nodes), `class` (group only). Optional edges:
 `part_of` (≤1, child → parent), `depends_on`, `affects`, `resolves` (decision → issue only),
 `supersedes` (decision → decision it replaces), `refines` (decision → decision it narrows; the target stays in
 force and is never a fold candidate). Optional `source_ref` (registry id, decision/issue only, single-valued),
@@ -58,12 +89,15 @@ Issue nodes require `issue_status` (`open` | `resolved` | `transferred`) and may
 `trigger`; `closed_by` (decision id, commit hash or short action text) is required when not open (D35).
 On a decision, `wip_status` is its implementation state: `PLANNED` = decided, not yet implemented; `IN_PROGRESS`;
 `DONE` = implemented (or nothing to implement); `FOLDED` = absorbed by the decision that supersedes it (D31, D37).
+A group / feature / function removed by `dissolve` is also `FOLDED`: kept as hidden history (D43).
 
 **Edge direction conventions**
 
 | Relation | Edge |
 |----------|------|
-| feature belongs to component / function belongs to feature | child `part_of` parent |
+| component / requirement belongs to the system | child `part_of` system |
+| group belongs to component or group; feature belongs to component or group / function belongs to feature | child `part_of` parent |
+| requirement constrains a component / group / feature / function | requirement `affects` target |
 | plan belongs to what it plans / plan step belongs to its plan | child `part_of` parent |
 | plan step comes after another step | later step `depends_on` earlier step |
 | feature needs another feature | `depends_on` |
@@ -85,6 +119,11 @@ On a decision, `wip_status` is its implementation state: `PLANNED` = decided, no
 | `registries[]` | `[]` | `{type, id_pattern, file}`: how decision/issue ids are recognised in existing registers (the source `migrate` copies from) |
 | `views[]` | absent | `{kind, path}` per generated document; kinds `decisions`, `issues`, `current`, `plans`, `public-decisions` |
 | `growth_threshold` | 5 | attached decision+issue count at which a split is proposed |
+| `classes[]` | absent | `{id, label, rank, source}` per class of the structure, read from the project's own criteria document (D38); a `depends_on` from a lower rank to a higher rank is warned |
+| `leaf_unit` | from the languages | `class` (Java / Kotlin / C#) \| `module` (Python / TypeScript / Rust) \| `package` (Go) — what one leaf stands for (D39) |
+| `source_extensions` | from the languages | e.g. `[".java"]`; files under component roots with these extensions and no leaf are listed by name (never read) |
+| `child_threshold` | 7 | structure children above which regrouping is proposed (D39, D43) |
+| `test_roots`, `test_kinds` | from the test file names | where tests live; `{unit, integration, helper}` fnmatch rules on the file name (D42) |
 | `backlog_filter` | absent | default filter for the open issues the Backlog lists (`owner`, `next_only`, `component`); hidden ones are counted (D33) |
 | `install` | set by install | sha256 snapshots for uninstall verification |
 
@@ -96,7 +135,8 @@ Not in config, by decision: `code_roots` (derived: union of component nodes' `co
 - **One place per fact (P1).** A node's text lives only in its entity file `docs/entities/<id>.md`; its status and
   edges live only in `dependency_graph.json`; the node `name` is a copy of the file's heading. Required sections:
   decision — Statement, Public summary, User's words, Reason, Date; issue — Text, Source; plan — Goal, Approval;
-  rule — Statement, Source; structure nodes — Summary. `Log` is always last.
+  rule — Statement, Source; system — Purpose, Premises, Values; requirement — Statement, Source; group — Summary,
+  Criterion; other structure nodes — Summary (plus the optional contract sections of D41). `Log` is always last.
 - **One writer (P2).** Only `graph_tool.py` writes the graph, entity files and views; every write is validated before
   it is saved and a refused write changes nothing. The graph keeps each entity file's sha256, so an edit made outside
   the tool is reported by `validate` and blocks further writes until restored.
@@ -211,27 +251,64 @@ Run when `config` is incomplete or `--reconfigure` is given.
      Scope note (D17): component detection is a *listing of top-level directory names* only. It never
      reads source files. The "no blind source walk" rule (S3) governs how `code_targets` are derived in
      Step 2 (from paths referenced by design documents), not this listing.
+   - **document roles (D38 P5)**: sort every document in scope into one of four roles and show the table —
+     *overview* (what the system is, its premises: e.g. `00-overview`, a design README), *classification criteria*
+     (the document that says how the structure is divided and which dependencies are allowed, e.g. a section
+     "common / individual" or "layers" in an architecture document), *function document* (describes one function
+     area; becomes a feature), *reference* (configuration references, generated catalogs, comparisons, test
+     strategies, deprecated material, registries — never a feature; attached as `docs` of the system, a component or
+     a group). Ask when a document's role is unclear.
+   - **system (D38 P1, P2)**: one `system` node named after the product; `docs` = the overview documents; `Purpose`,
+     `Premises` and `Values` are quoted or summarised from those documents with the section they come from (the
+     user confirms). Each invariant or requirement the overview states as binding (e.g. "guarantees are never cut")
+     becomes a `requirement` node `part_of` the system, its `Statement` quoting the document, `affects` the
+     components / groups it constrains.
+   - **classes (D38 P3, P4)**: read the classification-criteria document; propose `config.classes` with one entry per
+     class it defines (`id`, `label`, `rank` = 0 for the class others may depend on, higher for the classes that
+     depend on it, `source` = document and section). **Do not invent classes**: when no document states criteria,
+     say so and propose none (groups are then optional). Quote the document's dependency rule and show how the ranks
+     express it.
+   - **languages and tests (D39, D42)**: from the file-name extensions under the component roots (a listing, not a
+     read) propose `leaf_unit` (`class` for Java / Kotlin / C#, `module` for Python / TypeScript / Rust, `package`
+     for Go) and `source_extensions`; from the test file names propose `test_roots` and `test_kinds`
+     (`unit` e.g. `*Test.java`, `integration` e.g. `*IT.java`, `helper` e.g. `*Support.java`, fixtures) with counts
+     per pattern as evidence; `child_threshold` default 7.
 2. Persist the answers with `config set <key> <json>` (one call per key, e.g.
-   `config set views '[{"kind": "decisions", "path": "docs/views/decisions.md"}]'`) and create each component with
-   `add-node <id> component "<name>" --code <dir>/ --summary "<one line>"`.
+   `config set views '[{"kind": "decisions", "path": "docs/views/decisions.md"}]'`), create the system with
+   `add-node <id> system "<name>" --doc <overview> … --section 'Purpose=…' --section 'Premises=…' --section 'Values=…'`,
+   each requirement with `add <id> requirement "<name>" --part-of <system> --section 'Statement=…' --section 'Source=<doc>#<section>' --new-not-duplicate "<why>"`
+   then `add-edge <id> affects <node>` once the nodes exist, and each component with
+   `add-node <id> component "<name>" --part-of <system> --code <dir>/ --summary "<one line>"`.
 
 ### Step 1 — load and preserve
 If the graph exists, validate it (R1). Preserve `current_node`, `wip_status`, `part_of`, `config`
 unless `--reset-structure` (which discards `part_of` and re-proposes splits/folds under the
 current `growth_threshold`). Never drop a node because a scan did not rediscover it; report it instead.
 
-### Step 2 — derive structure from design docs (R5)
-For each document in `docs_scope` (each node is created with
-`add-node <id> feature|function "<name>" --part-of <parent> --doc <path> --code <path> … --summary "<one line>"`; the
-name is the document's first heading, the id its kebab-case form):
-- One `feature` node per design document — registry files (`config.registries[].file`) are not features, and neither are
-  plan documents a project keeps under its own rules — `part_of` the component whose `code_targets` its referenced
-  code falls under (ask if ambiguous; an index/overview document becomes `docs` of the component instead
-  of a feature).
-- A document with clearly separate top-level sections may yield `function` children; do **not** split on
-  first init unless the structure is explicit. Splitting is normally a growth proposal at handover.
-- Collect project-relative code paths mentioned in the document (code spans, tables, links) into
-  `code_targets`; each must fall under some component's roots, otherwise report it as unplaced.
+### Step 2 — derive structure from design docs (R5, D38, D39, D41, D42)
+The tree is built top-down: system → component → group → feature → leaf. Show the whole proposed tree (ids, names,
+parents, documents, leaf files) as one table and run the commands after approval.
+- **Groups**: one `group` per class a component's documents use, `add-node <id> group "<name>" --part-of <component>
+  --class <class id> --section 'Summary=…' --section 'Criterion=<the criterion quoted from the classification
+  document>'`. Nest groups only where the project's documents nest (e.g. the layers the architecture document lists
+  inside a class). A small component without classified documents has no groups.
+- **Features**: one `feature` per *function document* (Step 0 roles) —
+  `add-node <id> feature "<name>" --part-of <group or component> --doc <path> --summary "<one line>"`; the name is the
+  document's first heading, the id its kebab-case form. Overview, classification-criteria and reference documents,
+  registry files and plan documents are never features. Parent = the group whose class the document belongs to (its
+  folder or the criteria document says which; ask when ambiguous), else the component whose roots its referenced code
+  falls under. A document with clearly separate top-level sections may yield `function` children only when the
+  structure is explicit; otherwise splitting is a growth proposal at handover.
+- **Leaves (D39)**: one `function` per class (per `leaf_unit`) that the document references — by path, by class name
+  in a code span or table, or in a mapping table such as an "Implementation Reference" that maps document sections to
+  code and tests. `add-node <id> function "<ClassName>" --part-of <feature> --code <one file> --doc <doc>#<section> …
+  --test <test file> …`: exactly one code file per leaf, small types included; `--doc` once per document section that
+  specifies it (D41 K4; several leaves may point to the same section); `--test` for a unit test named after the class
+  (D42). A behaviour / integration test the mapping table lists for a section goes on the feature of that document
+  with `add-test <feature> <test file>`. Never read a source file to decide anything: names and paths only (S3).
+- A class referenced by several documents is still one leaf: parent = the document that specifies it most (ask when
+  even); the other documents are further `--doc` anchors.
+- Every code path must fall under some component's roots, otherwise report it as unplaced.
 - Never generate `task` nodes.
 
 ### Step 3 — decisions and issues (R5, OP1 = C, D28, D35)
@@ -268,9 +345,21 @@ Each edge with `add-edge <src> <kind> <dst>` (an edge that already exists is rep
 ### Step 5 — validate, render, report
 Run `graph_tool.py validate` (R1 + schema; every write already validated itself) and `render` (the views). Report
 what was created (nodes by type, edges, entity files, views), nodes not rediscovered, code paths not placed under any
-component, and the `check` output (content layer: registry ids without a node). On a refresh, the proposal shown
-before the commands is the diff (nodes added / updated / not rediscovered; edges added). Finally commit the footprint
-(message naming the nodes created, e.g. `graph: init (core, order-flow, d-001, tbd-01)`).
+component, and the `check` output: the content layer (registry ids without a node) and the **Structure model**
+section. Present its findings to the user as **discrepancies between the documents and the code**, grouped, each with
+its evidence and an open question rather than a verdict:
+- *code without a leaf* — files no design document references (listed by name; the tool never reads them): a class
+  may be specified by behaviour without its name, so ask whether the specification is missing or only the pointer
+  (e.g. an Implementation Reference row); never call it "unspecified" without having read the documents for it;
+- *specifications outside the design root* — when the files of a component are described only in documents outside
+  `docs_scope` (plans, results), name those documents and ask whether they are design documents (`docs_scope`) or the
+  design documents lack them;
+- *non-product code* (samples, examples, generated code) — ask whether leaves are expected there;
+- *tests without a node*, *contract missing*, *depends_on without expectations*, *against the rank order*.
+Record each open question as an issue node (`add <id> issue … --owner user --trigger …`, R10) attached to the node it
+concerns. On a refresh, the proposal shown before the commands is the diff (nodes added / updated / not rediscovered;
+edges added). Finally commit the footprint (message naming the nodes created, e.g. `graph: init (core, order-flow,
+d-001, tbd-01)`).
 
 ---
 
@@ -321,6 +410,10 @@ Purpose: load the full 1-hop / 2-hop neighbourhood and produce the Impact Assess
 ```markdown
 ## Impact Assessment Checklist — <node_id>
 
+### System and requirements (always shown — D38; only when a system node exists)
+| id | type | name | docs | affects | entity (read it) |
+|----|------|------|------|---------|------------------|
+
 ### Components (always shown — R7)
 | id | name | roots | overview doc | wip |
 |----|------|-------|--------------|-----|
@@ -335,8 +428,8 @@ Filter line + excluded counts per component; WARNING when nothing carries `next`
 |-----|----|------|------------|------------------|
 
 ### Files loaded
-| node | kind (entity / docs / code_targets) | path | status (exists / MISSING / CHANGED OUTSIDE graph_tool) |
-|------|------------------------------------|------|--------------------------------------------------------|
+| node | kind (entity / docs / code_targets / test_targets) | path (docs may carry `#section`: read that section) | status (exists / MISSING / CHANGED OUTSIDE graph_tool) |
+|------|----------------------------------------------------|------|--------------------------------------------------------|
 
 ### Constraints inherited from decisions
 - <one bullet per visible decision in hops 0–2: source_ref and its Statement; folded decisions and resolved issues are hidden and
@@ -395,6 +488,14 @@ successor's `/graph:hydrate <current_node>` output is the view. A pause is compl
    only part of the node's `code_targets`, or (c) its design document gained ≥ 2 top-level sections describing separate
    behaviours — (b) and (c) are judged by hand and, when proposed, marked `(manual)`. On approval: create `function` children with `part_of` the node, move the relevant `docs`,
    `code_targets` and decision/issue attachments to them, leave the parent with overview docs only.
+   **Regrouping (D39, D43)**: `check` proposes regrouping a node with more structure children than
+   `config.child_threshold`. Restructuring is done only with `move <node> <new-parent> --reason …`,
+   `group <id> <type> "<name>" --under <parent> <child> … --reason …` (insert a layer) and
+   `dissolve <node> --map <referrer>=<target> … --reason …` (children to the parent, the node kept as hidden history;
+   the command refuses while a reference is unmapped). Each is a proposal applied on approval; the reason is written to
+   the entity logs. The `Structure model` findings of `check` (code without a leaf, contract missing, tests without a
+   node, missing expectations, rank order, contracts newer than their tests) touching this session's nodes are
+   acknowledged: fixed now, or recorded as issues with owner and trigger.
 3. **Fold check (D31, D37)**: a candidate is a decision that is a `supersedes` target, has no other live in-edges (a `refines` in-edge is live, u46) and
    is not IN_PROGRESS / BLOCKED / FOLDED. On approval, `graph_tool.py fold <victim> <survivor>` **hides** it: the victim
    keeps its node and entity file, gets `wip_status: FOLDED`, the survivor `supersedes` it and inherits its `affects`.
@@ -424,13 +525,13 @@ Growth and fold are proposals in the interaction language; they are never applie
 
 | Rule | Content |
 |------|---------|
-| **R1 Cross-reference validation** | Executed by `graph_tool.py validate`; the checks are: `nodes[k].id == k` (fix the key, never the id). Every target of `part_of` / `depends_on` / `affects` / `resolves` / `supersedes` / `refines` and `current_node` exists. No self-edges. `part_of` ≤ 1 and acyclic. `resolves` only decision → issue, and its target has `issue_status: resolved`; `supersedes` and `refines` only decision → decision. `source_ref` matches some `config.registries[].id_pattern` when registries are defined. Non-component `code_targets` fall under the union of component `code_targets`. Schema-valid (run `python3 -c "import json,jsonschema;jsonschema.Draft202012Validator(json.load(open('${CLAUDE_PLUGIN_ROOT}/skills/protocol/schema/graph_schema.json'))).validate(json.load(open('dependency_graph.json')));print('OK')"` when available; otherwise check manually and say so). Schema self-test: `python3 ${CLAUDE_PLUGIN_ROOT}/skills/protocol/schema/fixtures/run_fixtures.py` (positive + negative fixtures; must print all PASS). |
+| **R1 Cross-reference validation** | Executed by `graph_tool.py validate`; the checks are: `nodes[k].id == k` (fix the key, never the id). Every target of `part_of` / `depends_on` / `affects` / `resolves` / `supersedes` / `refines` and `current_node` exists. No self-edges. `part_of` ≤ 1 and acyclic. `resolves` only decision → issue, and its target has `issue_status: resolved`; `supersedes` and `refines` only decision → decision. `source_ref` matches some `config.registries[].id_pattern` when registries are defined. Non-component `code_targets` and `test_targets` fall under the union of component `code_targets`. At most one `system`; when it exists every component is `part_of` it; a `requirement` is `part_of` the system; a `group` is `part_of` a component or group and its `class` is a `config.classes` id (D38). Schema-valid (run `python3 -c "import json,jsonschema;jsonschema.Draft202012Validator(json.load(open('${CLAUDE_PLUGIN_ROOT}/skills/protocol/schema/graph_schema.json'))).validate(json.load(open('dependency_graph.json')));print('OK')"` when available; otherwise check manually and say so). Schema self-test: `python3 ${CLAUDE_PLUGIN_ROOT}/skills/protocol/schema/fixtures/run_fixtures.py` (positive + negative fixtures; must print all PASS). |
 | **R2 Hydration** | If `dependency_graph.json` exists, never modify code before `/graph:hydrate <node_id>` of the relevant node with every pre-modification check ticked. If the node does not exist, create it first (init refresh or manual addition passing R1). If the user explicitly asks to skip, state the risk in one sentence, record the skip as an issue node (`add <id> issue …` with owner and trigger), proceed. |
 | **R3 Handover fidelity** | Nothing a successor needs lives outside the graph and its entity files (D30): verbatim decisions and reasons, identifiers chosen or renamed, options rejected and the user's words go into the entity of the node they concern; anything unresolved is an issue node with owner and trigger. |
 | **R4 Interaction language** | Every question, recommendation table, approval request, proposal (split / fold / component) and checklist shown to the user is written in `config.interaction_language` (inferred from CLAUDE.md and the user's messages when unset). Graph contents, entity files, generated views and SKILL text stay English. |
-| **R5 Structure follows design docs** | `/graph:init` never generates `task`. Decision / issue nodes exist only when referenced from a document in scope or from registry text of a referenced id. Every decision / issue is attached (`part_of`) to ≥ 1 component / feature / function. |
+| **R5 Structure follows design docs** | `/graph:init` never generates `task`. The classification (`config.classes`, groups) and the system's premises come from the project's own documents and are never invented (D38). A leaf is one class, created only for code a document references (D39). Decision / issue nodes exist only when referenced from a document in scope or from registry text of a referenced id. Every decision / issue is attached (`part_of`) to ≥ 1 structure node. |
 | **R6 Footprint** | The skill writes only to: `dependency_graph.json`, the entity files under `docs/entities/`, the generated views (`config.views[].path`), `.context/graph_tool.log`, the marked block in `CLAUDE.md`, the marked block in `.gitignore`. Never design docs, registries, source code, handover documents, `.claude/settings*.json`, or Claude memory. A write outside the footprint is refused and reported. |
-| **R7 Always-visible top layer** | Hydrate output begins with the table of all `component` nodes, regardless of hop distance. |
+| **R7 Always-visible top layer** | Hydrate output begins with the system and its requirements (when a system exists) and the table of all `component` nodes, regardless of hop distance. |
 | **R8 No reinvention** | Before proposing any new feature or function, search `nodes` (name, docs, code_targets) across all components and present matches. Never propose a new component autonomously; that is a user decision. Violations are recorded as issue nodes (owner and trigger). |
 | **R9 Numbers come from the tool** | Any id, hop, count, path status, timestamp or candidate list shown in a checklist or proposal must be copied from `graph_tool.py` output, never retyped or recomputed by hand. A pause is complete only when `graph_tool.py gate` prints `RESULT: OK` (D30). If the tool cannot run (no python3), say so and mark every such value `(manual)`. |
 | **R10 Record, then ask** (D34 R-a) | Once a graph exists, a question to the user is asked only after the node it concerns is written (the question itself `append`ed to that node, or a new issue node; a question that concerns no node goes on the component the work is in, or becomes a new issue), and the question cites the node id. The answer is written to the same node before any work continues, with the user's words verbatim (the entity text is English; the question as asked and the user's words stay in the language they were written in). Before the graph exists (`/graph:install`, the first `/graph:init`) the proposal table is the question and the commands run on approval are its record (config, entity files, operations log). |

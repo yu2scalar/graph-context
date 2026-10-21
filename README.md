@@ -19,7 +19,7 @@ Current version: **3.3.0-dev.9** (development pre-release; last release 3.2.0). 
 | Command | What it does |
 |---------|--------------|
 | `/graph:install` | Seed `dependency_graph.json`, append one marked block each to `CLAUDE.md` and `.gitignore`, snapshot checksums (`graph_tool.py install`, shown with `--dry-run` first). Nothing else is written to your project until `/graph:init`. |
-| `/graph:init [--reconfigure] [--reset-structure]` | Analyse the project, recommend and ask for `config` (design root, registries, language, components), derive the graph from design docs and registries. Idempotent; preserves human decisions unless `--reset-structure`. |
+| `/graph:init [--reconfigure] [--reset-structure]` | Analyse the project, recommend and ask for `config` (design root, registries, language, components, the classification its own documents define, leaf unit, test naming), derive the tree system → component → group → feature → leaf (one class) from design docs and registries, and report the discrepancies between documents and code it finds. Idempotent; preserves human decisions unless `--reset-structure`. |
 | `/graph:hydrate <node_id>` | Load the node plus 1-hop / 2-hop neighbours over every edge kind, read every referenced file, and emit the Impact Assessment Checklist: components, subgraph, inherited decision constraints, decisions to re-examine, existing capabilities, stale docs, blast radius. Required before modifying code. |
 | `/graph:handover` | Completion gate (D30): record the state on the graph, propose splits (growth) and folds (compaction), run the staleness check, commit, and finish only when `graph_tool.py gate` passes. No handover document: the next session runs `/graph:hydrate <current_node>`. |
 | `/graph:compact` | Run the fold check on demand. |
@@ -82,10 +82,25 @@ The skill files themselves stay in the plugin cache.
 
 ## Graph model
 
-**Hierarchy**: Root → `component` → `feature` → `function`. `decision` and `issue` nodes attach to the
-structure. Root holds only `current_node`, `nodes`, `config`.
+**Terms**: a **Node** is the unit that holds information in the graph, an **Edge** a relation between nodes, the
+**Entity file** a node's text.
 
-**Edges**: `part_of` (child → parent, at most one), `depends_on`, `affects`, `resolves` (decision → issue),
+**Hierarchy**: Root → `system` → `component` → `group` → `feature` → `function`, read top-down as a functional
+decomposition. The `system` holds the purpose, premises and values, with `requirement` nodes under it. A `group` is a
+classification (e.g. common / backend-specific) whose classes and ranks are read from the project's own design
+documents, never invented; a dependency against the rank order is warned. A leaf is exactly one class (or module /
+package) and only leaves hold code. `decision` and `issue` nodes attach to the structure. Root holds only
+`current_node`, `nodes`, `config`.
+
+**Contract and tests**: a node's contract is what must be decided before the code and cannot be read from it. Where a
+design document states it, the document stays the contract and the node points to it (with a section anchor); the
+entity file holds only what no document states — so the divergence between documents and code remains visible.
+`test_targets` attach unit tests to leaves and behaviour tests to the node of the document they verify.
+
+**Restructuring**: `move`, `group` (insert a layer) and `dissolve` (the node stays as hidden history); proposals,
+applied on approval.
+
+**Edges**: `part_of` (child → parent, at most one), `depends_on`, `affects` (decision / issue / requirement → what it constrains), `resolves` (decision → issue),
 `supersedes` (decision → decision it replaces), `refines` (decision → decision it narrows; the target stays in force).
 
 **Entity files**: every node's text lives in exactly one append-only file, `docs/entities/<id>.md`; status and
