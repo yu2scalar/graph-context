@@ -5,7 +5,7 @@ description: Graph-based project context management (protocol skill of the `grap
 
 # graph-context
 
-> Status: **v3.3.0-dev.9** (2026-09-28) — the pointer is the handover: entity files, generated views, issues as nodes, completion gate, fold hides. What changed and why: the decision register `references/40-decision-register.md`.
+> Status: **v3.4.0-dev.1** (2026-10-21) — the structure model: system → component → group → feature → leaf (one class), contracts in the design documents, test_targets, move / group / dissolve; on top of: the pointer is the handover, entity files, generated views, issues as nodes, completion gate, fold hides. What changed and why: the decision register `references/40-decision-register.md`.
 > Long-form material (full data model, public decision register D1–D43) lives in `${CLAUDE_PLUGIN_ROOT}/skills/protocol/references/`.
 
 ## Purpose
