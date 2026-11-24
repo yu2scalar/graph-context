@@ -50,6 +50,7 @@
 | D44 | init ends with a review plan of its own findings as the next work. | refines d33; resolves u60 | in progress |
 | D45 | revises marks a partial replacement; the earlier decision stays visible and is never folded. | refines d37; resolves u64 | in progress |
 | D46 | Leaves stay in the component of their file; cross-cutting decisions hang on the lowest common ancestor; defaults for ids, stale registry text, triggers and resolves. | refines d39; resolves u63 | in progress |
+| D47 | New projects adopt the plugin and report skill problems back; the greenfield start is fixed first. | resolves u66 | decided, not yet implemented |
 | S1 | `dependency_graph.json` lives at the project root | — | active |
 | S2 | v1: single SKILL.md, `/graph-*` as sub-commands | — | folded into D16 |
 | S3 | init scans design docs + referenced code, no blind source walk | — | folded into D17 |
