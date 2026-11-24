@@ -6,7 +6,7 @@ description: Graph-based project context management (protocol skill of the `grap
 # graph-context
 
 > Status: **v3.4.0-dev.2** (2026-10-21) — the structure model: system → component → group → feature → leaf (one class), contracts in the design documents, test_targets, move / group / dissolve; on top of: the pointer is the handover, entity files, generated views, issues as nodes, completion gate, fold hides. What changed and why: the decision register `references/40-decision-register.md`.
-> Long-form material (full data model, public decision register D1–D46) lives in `${CLAUDE_PLUGIN_ROOT}/skills/protocol/references/`.
+> Long-form material (full data model, public decision register D1–D48) lives in `${CLAUDE_PLUGIN_ROOT}/skills/protocol/references/`.
 
 ## Purpose
 
@@ -17,8 +17,11 @@ large enough that "just read the code" stops working:
    component or function already covered the need.
 2. **Forgotten updates**: code changed, the design document or decision that governs it did not.
 
-It does so by keeping an explicit, machine-checkable **index graph** over the project. The graph never
-holds document content; it holds references to where the content lives and the relations between them.
+It does so by keeping an explicit, machine-checkable **graph** of the project that is the **single source of its
+design information** (D48): purpose, premises, requirements, structure, contracts, decisions and issues live in the
+graph (status and edges in `dependency_graph.json`, text in entity files). Existing design documents are imported into
+it once; documents people read are exported from it on request as snapshots headed by the graph revision. Code is
+referenced, never copied.
 
 A third goal follows from the first two: **the pointer is the handover** (D30). Every fact a later session needs
 (decisions, issues, plans, working rules, the state of work in progress) is a node with its text in one entity
@@ -33,7 +36,7 @@ reaches everything from there. No handover document is written; `/graph:handover
 | `docs/entities/<id>.md` | One entity file per node: the node's text (decisions, issues, plans, rules, summaries of structure nodes). Written by `graph_tool.py` only, append-only (see Store). |
 | every `config.views[].path` | Generated documents people read (decision register, issue register, current specification, plans, public register). Re-rendered on every accepted write; never edited by hand. |
 | `.context/graph_tool.log` | Operations log: one line per accepted write (graph md5 before → after). |
-| `${CLAUDE_PLUGIN_ROOT}/skills/protocol/tools/graph_tool.py` | **The executable protocol (D26).** Every write to the store goes through it (R12). Commands by group — footprint: `install`, `uninstall` (both with `--dry-run`); read-only: `validate`, `gate`, `check`, `backlog`, `lint-prose`, `hydrate --dry-run`, `config get`, `render --check`; entities: `add`, `append`, `attach`, `rename`, `add-node`, `set-source-ref`; structure and state: `hydrate <node>` (current_node), `set-current`, `set-status`, `set-next`, `set-issue`, `close`, `add-edge`, `remove-edge`, `add-doc`, `add-code`, `add-test`, `fold`, `split`, `move`, `group`, `dissolve`, `config set`, `render`; migration: `migrate [--plans \| --retire-registry F \| --strip-graph-copies \| --restore-folds \| --drop-handover-path \| --add-system]`. Every number, id, hop, path status and timestamp shown to the user comes from this tool (R9). Full reference: `tools/README.md`. |
+| `${CLAUDE_PLUGIN_ROOT}/skills/protocol/tools/graph_tool.py` | **The executable protocol (D26).** Every write to the store goes through it (R12). Commands by group — footprint: `install`, `uninstall` (both with `--dry-run`); read-only: `validate`, `gate`, `check`, `backlog`, `lint-prose`, `hydrate --dry-run`, `config get`, `render --check`; entities: `add`, `append`, `attach`, `rename`, `add-node`, `set-source-ref`, `import-doc`; output on request: `export`; structure and state: `hydrate <node>` (current_node), `set-current`, `set-status`, `set-next`, `set-issue`, `close`, `add-edge`, `remove-edge`, `add-doc`, `add-code`, `add-test`, `fold`, `split`, `move`, `group`, `dissolve`, `config set`, `render`; migration: `migrate [--plans \| --retire-registry F \| --strip-graph-copies \| --restore-folds \| --drop-handover-path \| --add-system \| --track-log]`. Every number, id, hop, path status and timestamp shown to the user comes from this tool (R9). Full reference: `tools/README.md`. |
 | `${CLAUDE_PLUGIN_ROOT}/skills/protocol/schema/graph_schema.json` | JSON Schema, draft 2020-12. Authoritative for shapes. Shipped in the plugin, never copied into the project. |
 | `${CLAUDE_PLUGIN_ROOT}/skills/protocol/templates/graph_context.template.json` | Minimal valid seed graph. |
 | `${CLAUDE_PLUGIN_ROOT}/skills/protocol/references/` | Full data model, public decision register, sync notes. |
@@ -64,15 +67,24 @@ functional decomposition.
   are `function` nodes `part_of` the plan (R11) — work items, not structure. A `rule` is a working rule set by the
   user. `task` exists for manual use and is never generated.
 
-**Contract (D41)**: a node's contract is what must be decided before the code **and** cannot be read from it —
+**Contract (D41, D48)**: a node's contract is what must be decided before the code **and** cannot be read from it —
 responsibility, promises (inputs / outputs / errors), invariants, boundaries (what it must not do), acceptance
-criteria, expectations of each `depends_on` target. Where a design document states it, the document is the contract
-and the node's `docs` point to it, with a section anchor when the section matters (`docs/design/x.md#2`); one
-document section may be pointed to by several leaves and one leaf may point to several sections. The entity file
-holds contract sections (`Responsibility`, `Promises`, `Invariants`, `Boundaries`, `Acceptance criteria`,
-`Expectations`) only for what no document states. Nothing is copied from documents into entities, and method lists,
-algorithms and fields are never written as contract. The divergence between documents and code is kept on purpose:
-it is what the staleness checks find.
+criteria, expectations of each `depends_on` target. It lives in the node's entity file: the contract sections
+(`Responsibility`, `Promises`, `Invariants`, `Boundaries`, `Acceptance criteria`, `Expectations`) written with
+`add-node --section` / `append --section`, or a section imported verbatim from an existing design document with
+`import-doc <node> <path[#heading]>` (headed `Imported from <path>#<heading> (lines a-b, graph revision n)`, the
+document's own headings demoted two levels). After the import the document is a snapshot of the past: the node no
+longer points to it, the skill never changes or deletes it, and the user decides whether to keep it. Until a
+document is imported, `docs` may point to it (with a section anchor) as a pointer only. Method lists, algorithms and
+fields are never written as contract. The contract is written before the code and independently of it, so the
+divergence between contract and code stays visible: it is what the staleness checks find.
+
+**Revision (D48)**: the graph root carries `revision {serial, updated}`, raised by `graph_tool.py` on every accepted
+write that changes nodes or config (moving `current_node` alone raises nothing); every node records `rev`, the serial
+of its last change. `.context/graph_tool.log` (one line per write) is tracked in git, so every change can be traced.
+`export --out <path> [--node <id>] [--since <serial>]` writes a design document snapshot on request: purpose,
+structure, contracts, decisions and open issues, headed by the revision, optionally with the nodes changed since a
+serial. Exports are never re-rendered automatically and never edited by hand.
 
 **Tests (D42)**: `test_targets` on structure nodes. A unit test named after one class goes on that leaf; a behaviour
 or integration test goes on the node of the design document it verifies (from the project's own mapping table when
@@ -180,7 +192,9 @@ in its step 0 (this file's own folder). Nothing is copied into the project excep
 
 1. Run `python3 ${CLAUDE_PLUGIN_ROOT}/skills/protocol/tools/graph_tool.py install --dry-run` from the project root. It prints the
    footprint: `dependency_graph.json` (created from the template if absent), the marked block appended to `CLAUDE.md`
-   and to `.gitignore` (each file created if absent), `.context/graph_tool.log`. Nothing is written.
+   and to `.gitignore` (each file created if absent), `.context/graph_tool.log`. Nothing is written. **The project must
+   be a git repository** (the gate and the staleness checks use git): outside one, `install` refuses and says so — ask
+   the user whether to run `git init` first (D48).
 2. Show that table and ask the user, in the interaction language, before anything is written.
 3. On approval run `graph_tool.py install`. It records sha256 of `CLAUDE.md` and `.gitignore` as they were
    (`config.install`, with `installed_at` and `skill_version` from `plugin.json`), seeds the graph, and appends each
@@ -195,8 +209,10 @@ in its step 0 (this file's own folder). Nothing is copied into the project excep
    - Registry mapping (decision / issue ids → files) = `dependency_graph.json` → `config.registries`.
    <!-- graph-context:end -->
    ```
-   and the `.gitignore` block is `# graph-context:begin` / `.context/` / `# graph-context:end` (`.context/` holds only
-   the operations log).
+   and the `.gitignore` block is `# graph-context:begin` / `.context/*` / `!.context/graph_tool.log` /
+   `# graph-context:end`: the operations log is tracked in git, the rest of `.context/` (e.g. a commands file for
+   `apply`) is not (D48). An install made before D48 ignores all of `.context/`; `graph_tool.py migrate --track-log`
+   rewrites its block.
 4. A project-scope plugin install leaves `.claude/settings.json` (the enabled plugin); it belongs to the project, not to
    the footprint — commit it together with the footprint so the gate's clean-tree check passes.
 5. Next step: `/graph:init`. The template's `interaction_language` (`en`) and `design_root` (`docs/`) are placeholders
@@ -228,6 +244,20 @@ Purpose: create or refresh `dependency_graph.json` and its entity files. Idempot
 Every change is made with `graph_tool.py` commands (R12): nothing is typed into the JSON or into `docs/entities/`.
 Because each command writes at once, **the approval comes before the commands**: collect the proposal (config values,
 nodes, edges, issue states), show it in the interaction language, and run the commands only after the user approves.
+
+### Two paths (D48)
+- **New project** — no design document in scope (and usually no code yet): run Step 0 for the configuration only
+  (language, design_root as the place where exports and imported documents are expected, docs_scope, views, the
+  planned language for `leaf_unit` / `source_extensions`, test naming when known), then **interview the user** and
+  write the answers into the graph: the system (`add-node <id> system "<name>" --section 'Purpose=…' --section
+  'Premises=…' --section 'Values=…'`, the user's words quoted), each binding requirement (`add <id> requirement …`),
+  the classes when the user already knows how the structure will be divided (`config set classes …`, groups), the
+  components for source directories that exist, and features / functions for the functions the user names (with
+  contract sections when stated). No overview document is required; nothing is invented the user did not say. Then
+  Step 5. The first design work afterwards is to fill the contracts of the planned functions before their code.
+- **Existing documents** — Steps 0–5 below derive the structure from the design documents; Step 2 also **imports**
+  each function document into the graph (`import-doc`), so that the graph becomes the source and the discrepancies
+  are sorted out and fixed there (Step 5 and the review plan, D44).
 
 ### Step 0 — project analysis and configuration Q&A
 Run when `config` is incomplete or `--reconfigure` is given.
@@ -324,6 +354,11 @@ parents, documents, leaf files) as one table and run the commands after approval
   under its feature or group when one fits, else directly under the component — and the naming document is a `--doc`
   anchor of the leaf. `check` warns about a leaf placed outside the component of its file.
 - Every code path must fall under some component's roots, otherwise report it as unplaced.
+- **Import (D48)**: once the tree is approved and written, import each function document into the graph —
+  `import-doc <feature> <document>` for the whole document, or `import-doc <leaf> <document>#<heading>` for a section
+  that specifies one leaf — through the same `apply` file. Overview and criteria documents are imported into the
+  system and the groups the same way. The documents themselves stay unchanged; tell the user they are now snapshots
+  that may be kept or removed.
 - Never generate `task` nodes.
 
 ### Step 3 — decisions and issues (R5, OP1 = C, D28, D35)
@@ -563,8 +598,8 @@ Growth and fold are proposals in the interaction language; they are never applie
 | **R2 Hydration** | If `dependency_graph.json` exists, never modify code before `/graph:hydrate <node_id>` of the relevant node with every pre-modification check ticked. If the node does not exist, create it first (init refresh or manual addition passing R1). If the user explicitly asks to skip, state the risk in one sentence, record the skip as an issue node (`add <id> issue …` with owner and trigger), proceed. |
 | **R3 Handover fidelity** | Nothing a successor needs lives outside the graph and its entity files (D30): verbatim decisions and reasons, identifiers chosen or renamed, options rejected and the user's words go into the entity of the node they concern; anything unresolved is an issue node with owner and trigger. |
 | **R4 Interaction language** | Every question, recommendation table, approval request, proposal (split / fold / component) and checklist shown to the user is written in `config.interaction_language` (inferred from CLAUDE.md and the user's messages when unset). Graph contents, entity files, generated views and SKILL text stay English. |
-| **R5 Structure follows design docs** | `/graph:init` never generates `task`. The classification (`config.classes`, groups) and the system's premises come from the project's own documents and are never invented (D38). A leaf is one class, created only for code a document references (D39). Decision / issue nodes exist only when referenced from a document in scope or from registry text of a referenced id. Every decision / issue is attached (`part_of`) to ≥ 1 structure node. |
-| **R6 Footprint** | The skill writes only to: `dependency_graph.json`, the entity files under `docs/entities/`, the generated views (`config.views[].path`), `.context/graph_tool.log`, the marked block in `CLAUDE.md`, the marked block in `.gitignore`. Never design docs, registries, source code, handover documents, `.claude/settings*.json`, or Claude memory. A write outside the footprint is refused and reported. |
+| **R5 The graph is the source; structure is never invented** | `/graph:init` never generates `task`. The classification (`config.classes`, groups) and the system's premises come from the project's own documents or from the user's answers and are never invented (D38, D48); existing design documents are imported, after which the graph is their source. A leaf is one class, created only for code a document references (D39). Decision / issue nodes exist only when referenced from a document in scope or from registry text of a referenced id. Every decision / issue is attached (`part_of`) to ≥ 1 structure node. |
+| **R6 Footprint** | The skill writes only to: `dependency_graph.json`, the entity files under `docs/entities/`, the generated views (`config.views[].path`), `.context/graph_tool.log` (tracked in git) and a commands file under `.context/` for `apply`, the marked block in `CLAUDE.md`, the marked block in `.gitignore`, and the path the user names for `export`. Never design docs (`import-doc` only reads them), registries, source code, handover documents, `.claude/settings*.json`, or Claude memory. A write outside the footprint is refused and reported. |
 | **R7 Always-visible top layer** | Hydrate output begins with the system and its requirements (when a system exists) and the table of all `component` nodes, regardless of hop distance. |
 | **R8 No reinvention** | Before proposing any new feature or function, search `nodes` (name, docs, code_targets) across all components and present matches. Never propose a new component autonomously; that is a user decision. Violations are recorded as issue nodes (owner and trigger). |
 | **R9 Numbers come from the tool** | Any id, hop, count, path status, timestamp or candidate list shown in a checklist or proposal must be copied from `graph_tool.py` output, never retyped or recomputed by hand. A pause is complete only when `graph_tool.py gate` prints `RESULT: OK` (D30). If the tool cannot run (no python3), say so and mark every such value `(manual)`. |

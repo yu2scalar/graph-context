@@ -4,6 +4,7 @@
 | Key | Required | Type | Definition |
 |-----|----------|------|------------|
 | `$schema` | no | string | editor hint; ignored by the skill |
+| `revision` | no (set by the tool) | `{serial, updated}` | D48: raised by every accepted write that changes nodes or config; exports are headed by it |
 | `current_node` | yes | nodeId \| null | the single node being worked on now — the whole handover (D30); must exist in `nodes`; written by `hydrate` and `set-current` only |
 | `nodes` | yes | object<nodeId, node> | all nodes; key must equal `node.id` |
 | `config` | yes | object (closed) | project-wide settings written by the init Q&A, editable by hand |
@@ -38,6 +39,7 @@ Deliberately absent: `code_roots` (derived: union of component nodes' `code_targ
 | `code_targets` | yes | path[] | files/dirs the node owns. component: its root dir(s). others: must fall under some component's roots; only leaves should hold code (D39) |
 | `test_targets` | no | path[] | test files of a structure node (D42): class-named unit tests on the leaf, behaviour tests on the node of the document they verify |
 | `class` | no | nodeId | group only: the `config.classes` id it stands for (D38) |
+| `rev` | no (set by the tool) | integer | D48: the revision serial of the node's last change |
 | `part_of` | no | nodeId[] ≤ 1 | parent. component→system (when one exists); requirement→system; group→component/group; feature→component/group; function→feature/function; decision/issue→where attached. The system has none |
 | `depends_on` | no | nodeId[] | prerequisite / expectation (incl. cross-component: → providing component's function) ; issue→decision that raised it |
 | `affects` | no | nodeId[] | decision/issue/requirement → structure node it constrains or impacts |

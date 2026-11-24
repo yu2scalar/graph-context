@@ -7,8 +7,10 @@ code": **duplicate or similar implementations** written because a session did no
 already covered the need, and **forgotten updates** where code changed but the design document or decision
 governing it did not.
 
-The plugin keeps `dependency_graph.json`, a schema-validated **index** over your project (never a copy of its
-content): components, design-document structure, decisions, issues, and the relations between them. It forces
+The plugin keeps `dependency_graph.json` and its entity files as the **single source of your project's design
+information**: purpose, premises, requirements, structure, contracts, decisions, issues and the relations between them.
+Existing design documents are imported once (`import-doc`); documents people read are exported on request
+(`export`) as snapshots headed by the graph revision, which rises with every change. It forces
 the relevant 1-hop / 2-hop neighbourhood to be loaded before any code change and gates every pause so that
 `current_node` alone is the handover.
 
@@ -18,8 +20,8 @@ Current version: **3.4.0-dev.2** (development pre-release; last release 3.2.0). 
 
 | Command | What it does |
 |---------|--------------|
-| `/graph:install` | Seed `dependency_graph.json`, append one marked block each to `CLAUDE.md` and `.gitignore`, snapshot checksums (`graph_tool.py install`, shown with `--dry-run` first). Nothing else is written to your project until `/graph:init`. |
-| `/graph:init [--reconfigure] [--reset-structure]` | Analyse the project, recommend and ask for `config` (design root, registries, language, components, the classification its own documents define, leaf unit, test naming), derive the tree system → component → group → feature → leaf (one class) from design docs and registries, and report the discrepancies between documents and code it finds. Idempotent; preserves human decisions unless `--reset-structure`. |
+| `/graph:install` | (In a git repository.) Seed `dependency_graph.json`, append one marked block each to `CLAUDE.md` and `.gitignore`, snapshot checksums (`graph_tool.py install`, shown with `--dry-run` first). Nothing else is written to your project until `/graph:init`. |
+| `/graph:init [--reconfigure] [--reset-structure]` | Analyse the project, recommend and ask for `config` (design root, registries, language, components, the classification its own documents define, leaf unit, test naming), build the tree system → component → group → feature → leaf (one class) — in a new project by interviewing you, in an existing one from its design docs and registries, whose text is imported into the graph — and report the discrepancies between documents and code it finds. Idempotent; preserves human decisions unless `--reset-structure`. |
 | `/graph:hydrate <node_id>` | Load the node plus 1-hop / 2-hop neighbours over every edge kind, read every referenced file, and emit the Impact Assessment Checklist: components, subgraph, inherited decision constraints, decisions to re-examine, existing capabilities, stale docs, blast radius. Required before modifying code. |
 | `/graph:handover` | Completion gate (D30): record the state on the graph, propose splits (growth) and folds (compaction), run the staleness check, commit, and finish only when `graph_tool.py gate` passes. No handover document: the next session runs `/graph:hydrate <current_node>`. |
 | `/graph:compact` | Run the fold check on demand. |
@@ -76,7 +78,7 @@ Only these, all removable by `/graph:uninstall`:
 | each `config.views[].path` (e.g. `docs/views/*.md`) | generated registers, current specification and plan views (never edited by hand) |
 | `.context/graph_tool.log` | the operations log (one line per write) |
 | one marked block in `CLAUDE.md` | the protocol instructions for Claude |
-| one marked block in `.gitignore` | ignores `.context/` |
+| one marked block in `.gitignore` | ignores `.context/` except the operations log, which is tracked |
 
 The skill files themselves stay in the plugin cache.
 
