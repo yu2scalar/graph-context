@@ -14,7 +14,7 @@ Existing design documents are imported once (`import-doc`); documents people rea
 the relevant 1-hop / 2-hop neighbourhood to be loaded before any code change and gates every pause so that
 `current_node` alone is the handover.
 
-Current version: **3.4.0-dev.2** (development pre-release; last release 3.2.0). Plugin name `graph`, marketplace `graph-context` (this repository).
+Current version: **3.4.0-dev.3** (development pre-release; last release 3.2.0). Plugin name `graph`, marketplace `graph-context` (this repository).
 
 ## Commands
 
