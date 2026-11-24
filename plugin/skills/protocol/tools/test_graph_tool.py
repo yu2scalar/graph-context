@@ -268,6 +268,12 @@ def test_install():
     import io, contextlib, hashlib
     tmp = tempfile.mkdtemp(); cwd = os.getcwd(); os.chdir(tmp)
     try:
+        def cli0(*a):
+            b = io.StringIO()
+            with contextlib.redirect_stdout(b): rc = gt.main(list(a))
+            return rc, b.getvalue()
+        rc, out = cli0("install", "--dry-run"); assert rc == 1 and "not a git repository" in out, out  # D48 (2): install needs git
+        import subprocess as _sp; _sp.run(["git", "init", "-q"], check=True)
         open("CLAUDE.md", "w").write("# proj\nno final newline")  # .gitignore absent
         before = hashlib.sha256(open("CLAUDE.md", "rb").read()).hexdigest()
         def cli(*a):
@@ -428,5 +434,60 @@ def test_run2_fixes():
     finally:
         os.chdir(cwd); shutil.rmtree(tmp)
 
+def test_graph_first():
+    """D48: revision / rev, tracked log, import-doc, export, install needs git."""
+    import io, contextlib, subprocess as sp_
+    tmp = tempfile.mkdtemp(); cwd = os.getcwd(); os.chdir(tmp)
+    def cli(*a):
+        b = io.StringIO()
+        with contextlib.redirect_stdout(b): rc = gt.main(list(a))
+        return rc, b.getvalue()
+    try:
+        sp_.run(["git", "init", "-q"], check=True)
+        rc, out = cli("install"); assert rc == 0, out
+        assert "!.context/graph_tool.log" in open(".gitignore").read(), "the operations log is tracked (D48)"
+        os.makedirs("src/main"); open("src/main/Router.java", "w").write("x"); os.makedirs("docs/design")
+        open("docs/design/routing.md", "w").write("# Routing\n\n## 1 Scope\nall\n\n## 2 Route order\nFirst the catalog, then the table.\n### 2.1 detail\nkeep\n\n## 3 Other\nno\n")
+        rc, out = cli("add-node", "app", "system", "App", "--section", "Purpose=Route queries", "--section", "Premises=Never cut guarantees"); assert rc == 0, out
+        r1 = gt.load("dependency_graph.json")["revision"]["serial"]
+        assert gt.load("dependency_graph.json")["nodes"]["app"]["rev"] == r1, "a new node gets rev = serial"
+        cli("add-node", "core", "component", "Core", "--part-of", "app", "--code", "src/")
+        cli("add-node", "routing", "feature", "Routing", "--part-of", "core", "--doc", "docs/design/routing.md", "--summary", "routing")
+        rc, out = cli("add-node", "router", "function", "Router", "--part-of", "routing", "--code", "src/main/Router.java"); assert rc == 0, out
+        g = gt.load("dependency_graph.json"); r2 = g["revision"]["serial"]
+        assert r2 == r1 + 3 and g["nodes"]["app"]["rev"] == r1 and g["nodes"]["router"]["rev"] == r2, (r1, r2, g["revision"])
+        cli("set-current", "router"); assert gt.load("dependency_graph.json")["revision"]["serial"] == r2, "current_node alone raises nothing"
+        # import-doc: verbatim section, pointer dropped, provenance kept
+        rc, out = cli("import-doc", "routing", "docs/design/routing.md#2 Route order", "--dry-run"); assert rc == 0 and "dry-run" in out and "## Imported" not in open("docs/entities/routing.md").read(), out
+        rc, out = cli("import-doc", "routing", "docs/design/routing.md"); assert rc == 0, out
+        s = gt.entity_sections("docs/entities/routing.md"); h = [x for x in s if x.startswith("Imported from docs/design/routing.md")][0]
+        assert "lines 1-" in h and "First the catalog" in s[h] and "##### 2.1 detail" in s[h] and "#### 2 Route order" in s[h] and "2 Route order" not in s, s
+        g = gt.load("dependency_graph.json"); assert g["nodes"]["routing"]["docs"] == [] and g["nodes"]["routing"]["rev"] == g["revision"]["serial"], g["nodes"]["routing"]
+        assert open("docs/design/routing.md").read().startswith("# Routing"), "the document is never changed"
+        rc, out = cli("import-doc", "router", "docs/design/routing.md#2 Route order"); assert rc == 0, out
+        s2 = gt.entity_sections("docs/entities/router.md"); h2 = [x for x in s2 if x.startswith("Imported from")][0]
+        assert "#2 Route order (lines 6-10" in h2 and "## 3 Other" not in s2[h2], (h2, s2[h2])
+        txt = "\n".join(f"{a} {b} {c}" for a, b, c in gt.structure_checks(gt.load("dependency_graph.json")))
+        assert "router contract missing" not in txt, "an imported section is a contract source"
+        rc, out = cli("import-doc", "router", "docs/design/routing.md#9 none"); assert rc == 1 and "no heading" in out, out
+        # export: snapshot headed by the revision, never into the store, no silent overwrite
+        g = gt.load("dependency_graph.json"); serial = g["revision"]["serial"]; nlog = open(".context/graph_tool.log").read().count("\n")
+        rc, out = cli("export", "--out", "out/design.md", "--since", str(r1)); assert rc == 0, out
+        d = open("out/design.md").read()
+        assert f"Graph revision {serial}" in d and "**Purpose**" in d and "Route queries" in d and "### Routing (`routing`, feature)" in d and "First the catalog" in d and "## Changed since revision" in d and "`router`" in d, d[:900]
+        assert open(".context/graph_tool.log").read().count("\n") == nlog + 1 and gt.load("dependency_graph.json")["revision"]["serial"] == serial, "export logs one line and changes no revision"
+        rc, out = cli("export", "--out", "out/design.md"); assert rc == 1 and "--force" in out, out
+        rc, out = cli("export", "--out", "docs/entities/x.md"); assert rc == 1, out
+        rc, out = cli("export", "--out", "out/r.md", "--node", "routing"); assert rc == 0 and "# Routing — design snapshot" in open("out/r.md").read(), open("out/r.md").read()[:200]
+        # migrate --track-log rewrites an old block
+        open(".gitignore", "w").write("x\n# graph-context:begin\n.context/\n# graph-context:end\n")
+        rc, out = cli("migrate", "--track-log"); assert rc == 0 and open(".gitignore").read() == "x\n" + gt.GITIGNORE_BLOCK, open(".gitignore").read()
+        rc, out = cli("migrate", "--track-log"); assert rc == 0 and "nothing to do" in out, out
+        print("test_graph_first: all assertions hold"); return 0
+    except AssertionError as e:
+        print("FAIL:", e); return 1
+    finally:
+        os.chdir(cwd); shutil.rmtree(tmp)
+
 if __name__ == "__main__":
-    sys.exit(main() or test_gate() or test_install() or test_structure_model() or test_run2_fixes())
+    sys.exit(main() or test_gate() or test_install() or test_structure_model() or test_run2_fixes() or test_graph_first())

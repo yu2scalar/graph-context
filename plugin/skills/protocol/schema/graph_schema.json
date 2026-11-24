@@ -11,6 +11,16 @@
       "description": "Editor hint. Ignored by the skill.",
       "type": "string"
     },
+    "revision": {
+      "description": "D48: the graph revision, raised by graph_tool on every accepted write that changes nodes or config. serial counts the changes; updated is when the last one happened. Exports are headed by it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["serial", "updated"],
+      "properties": {
+        "serial": { "type": "integer", "minimum": 1 },
+        "updated": { "type": "string", "minLength": 1 }
+      }
+    },
     "current_node": {
       "description": "The single node being worked on now, or null when no work is active. Must be a key of `nodes`. Written by /graph-hydrate and /graph-handover only.",
       "oneOf": [
@@ -90,6 +100,11 @@
         "code_targets": {
           "description": "Files or directories this node owns. For a component: its root directory(ies). For any other type: each path must fall under some component's code_targets; only leaves should hold code (D39, a check warning). May be empty.",
           "$ref": "#/$defs/filePathList"
+        },
+        "rev": {
+          "description": "D48: the revision serial of this node's last change (set by graph_tool); export --since N lists nodes with rev > N.",
+          "type": "integer",
+          "minimum": 1
         },
         "test_targets": {
           "description": "Test files of this node (D42): a unit test named after one class on that leaf; a behaviour / integration test on the node of the design document it verifies. Each path must fall under some component's code_targets. Structure nodes only.",

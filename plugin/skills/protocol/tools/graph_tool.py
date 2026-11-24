@@ -41,6 +41,9 @@ Usage (run from the project root that holds dependency_graph.json):
                                               insert a node between a parent and some children (D43 R2)
   graph_tool.py dissolve <node> --reason TEXT [--map <referrer>=<target> ...] [--docs-to N] [--code-to N] [--tests-to N]
                                               children to the parent, node kept as hidden history; refuses while a reference is unmapped (D43 R3)
+  graph_tool.py import-doc <node> <path[#heading]> [--dry-run]   copy a document (section) verbatim into the node's entity (D48)
+  graph_tool.py export --out PATH [--node N] [--since SERIAL] [--force]   design snapshot from the graph, headed by its revision (D48)
+  graph_tool.py migrate --track-log [--dry-run]   track .context/graph_tool.log in git (D48)
   graph_tool.py apply <file> [--verbose]      run a file of commands (one JSON array of arguments per line) as one write: all or nothing (u62)
   graph_tool.py refs [--doc PATH ...] [--json]  per document: the code / test names and paths it mentions, with the section (read-only, u62)
   graph_tool.py migrate --add-system --system-name "<name>" [--system-id ID] [--dry-run]   add the apex over every component (D38 P6)
@@ -84,11 +87,26 @@ def save(path, g):
 class WriteRefused(Exception):
     """Raised by guarded_save: the graph would be invalid, nothing was written (U31, plan integrity-store P2)."""
 
+def bump_revision(path, g):
+    """D48 (5): when nodes or config differ from the saved graph, raise revision.serial, stamp revision.updated and set
+    rev = serial on every node that changed (current_node alone is not a design change and raises nothing)."""
+    old = load(path) if os.path.exists(path) else {"nodes": {}, "config": {}}
+    strip = lambda n: {k: v for k, v in n.items() if k != "rev"}
+    on, nn = old.get("nodes", {}), g.get("nodes", {})
+    changed = [k for k in nn if k not in on or strip(on[k]) != strip(nn[k])]
+    if not changed and old.get("config") == g.get("config") and set(on) == set(nn):
+        return
+    rev = dict(old.get("revision") or {"serial": 0})
+    rev["serial"] = rev.get("serial", 0) + 1; rev["updated"] = now_iso()
+    g["revision"] = rev
+    for k in changed: nn[k]["rev"] = rev["serial"]
+
 def guarded_save(path, g):
-    """Validate first, save only when valid (R1 + schema + entity hashes + view drift)."""
+    """Validate first, save only when valid (R1 + schema + entity hashes + view drift); raise the revision (D48)."""
     problems, _ = validate(g, drift=False)
     if problems:
         raise WriteRefused(problems)
+    bump_revision(path, g)
     save(path, g)
     for v in g.get("config", {}).get("views", []):  # P3: views are regenerated on every accepted write, never by hand
         want = render_view(g, v["kind"])
@@ -149,7 +167,7 @@ CLAUDE_BLOCK = """<!-- graph-context:begin -->
 - Registry mapping (decision / issue ids \u2192 files) = `dependency_graph.json` \u2192 `config.registries`.
 <!-- graph-context:end -->
 """
-GITIGNORE_BLOCK = "# graph-context:begin\n.context/\n# graph-context:end\n"
+GITIGNORE_BLOCK = "# graph-context:begin\n.context/*\n!.context/graph_tool.log\n# graph-context:end\n"  # D48: the operations log is tracked
 BLOCKS = (("CLAUDE.md", CLAUDE_BLOCK, "<!-- graph-context:begin -->", "<!-- graph-context:end -->", "claude_md_sha256_before"),
           (".gitignore", GITIGNORE_BLOCK, "# graph-context:begin", "# graph-context:end", "gitignore_sha256_before"))
 
@@ -163,6 +181,8 @@ def cmd_install(g, args):
     """Seed the graph, append the two marked blocks, record sha256 snapshots (R6). --dry-run prints the footprint only.
     The block is appended with no blank line before it (only a newline when the file lacks a final one), so uninstall can
     restore the file byte-identical."""
+    if subprocess.run(["git", "rev-parse", "--is-inside-work-tree"], capture_output=True).returncode != 0:  # D48 (2)
+        print("ERROR: this folder is not a git repository. The completion gate and the staleness checks need git: run `git init` first (ask the user), then install."); return 1
     rows = [("dependency_graph.json", "keep (exists)" if os.path.exists(args.graph) else "create from the template")]
     for f, block, begin, _, _ in BLOCKS:
         cur = open(f, encoding="utf-8").read() if os.path.exists(f) else None
@@ -509,7 +529,7 @@ def timestamp_checks(ns, keys):
     rows = []
     for k in keys:
         n = ns[k]
-        c = newest(n.get("code_targets", [])); d = newest(n.get("docs", []))
+        c = newest(n.get("code_targets", [])); d = newest(n.get("docs") or ([n["file"]] if n.get("file") else []))  # D48: the entity is the source when no document is
         if not n.get("code_targets"):
             finding = "(no code_targets)"
         elif c[0] and d[0] and newer(c[0], d[0]):
@@ -549,7 +569,8 @@ def structure_checks(g):
     for k in leaves:  # D41 K3: every leaf needs a contract source
         sec = entity_sections(ns[k]["file"]) if ns[k].get("file") and os.path.exists(ns[k]["file"]) else {}
         resp = sec.get("Responsibility", "")
-        if not ns[k].get("docs") and (not resp or resp.startswith(NOT_RECORDED)):
+        imported = any(h.startswith("Imported from ") for h in sec)  # D48 (3): an imported section is a contract source
+        if not ns[k].get("docs") and not imported and (not resp or resp.startswith(NOT_RECORDED)):
             out.append(("warn", k, "contract missing: no design document points here and the entity has no Responsibility (D41 K3)"))
     exts = set(cfg.get("source_extensions", []))
     if exts:  # D39 G6: code without a leaf, by name only (files are never read)
@@ -1607,9 +1628,22 @@ def drop_handover_path(g, args):
     log_op(g, f"migrate --drop-handover-path: removed config.handover_path `{hp}`" + (f", log moved from `{old_log}`" if move else ""), args.graph, b4)
     return cmd_validate(g, args)
 
+def track_log(g, args):
+    """D48 (5): existing installs ignore all of .context/; rewrite the marked .gitignore block so the operations log is tracked."""
+    f = ".gitignore"; begin, end = "# graph-context:begin", "# graph-context:end"
+    if not os.path.exists(f) or begin not in open(f, encoding="utf-8").read(): print("ERROR: no graph-context block in .gitignore (run install first)"); return 1
+    txt = open(f, encoding="utf-8").read(); a = txt.find(begin); b = txt.find("\n", txt.find(end, a)); b = len(txt) if b < 0 else b + 1
+    if txt[a:b] == GITIGNORE_BLOCK: print("nothing to do: the operations log is already tracked"); return 0
+    print("## migrate --track-log" + (" --dry-run" if args.dry_run else "")); print("- .gitignore block -> " + GITIGNORE_BLOCK.strip().replace("\n", " | "))
+    if args.dry_run: return 0
+    open(f, "w", encoding="utf-8").write(txt[:a] + GITIGNORE_BLOCK + txt[b:])
+    log_op(g, "migrate --track-log: .gitignore block now tracks .context/graph_tool.log", args.graph, md5(args.graph), force=True)
+    print("done: commit .gitignore and .context/graph_tool.log"); return 0
+
 def cmd_migrate(g, args):
     """Give every node without an entity file its file, mechanically and reproducibly (no judgment, no paraphrase)."""
     if getattr(args, "add_system", False): return add_system(g, args)
+    if getattr(args, "track_log", False): return track_log(g, args)
     if getattr(args, "drop_handover_path", False): return drop_handover_path(g, args)
     if getattr(args, "restore_folds", False): return restore_folds(g, args)
     if getattr(args, "strip_graph_copies", False): return strip_graph_copies(g, args)
@@ -1880,6 +1914,93 @@ def cmd_dissolve(g, args):
     save_restructure(g, args, backup, f"dissolve {k} -> {parent}: children {', '.join(kids) or 'none'}; mapped {', '.join(f'{a}={b}' for a, b in mp.items()) or 'none'} ({args.reason})")
     print(f"dissolved `{k}`: {len(kids)} children moved to `{parent}`; kept as hidden history"); return cmd_validate(g, args)
 
+def doc_section(path, anchor):
+    """The lines of a document, or of the section whose heading text starts with `anchor` (up to the next heading of the
+    same or a higher level). Returns (first line no, last line no, text) or None."""
+    lines = open(path, encoding="utf-8", errors="replace").read().splitlines()
+    if not anchor: return (1, len(lines), "\n".join(lines).strip())
+    for i, l in enumerate(lines):
+        h = re.match(r"^(#{1,6})\s+(.*?)\s*$", l)
+        if h and h.group(2).startswith(anchor):
+            j = i + 1
+            while j < len(lines) and not re.match(r"^#{1,%d}\s" % len(h.group(1)), lines[j]): j += 1
+            return (i + 1, j, "\n".join(lines[i:j]).strip())
+    return None
+
+def cmd_import_doc(g, args):
+    """D48 (3): copy a design document (or one section) verbatim into a node's entity file, with file:line and the graph
+    revision; the document itself is never changed and stops being a docs pointer of that node (the graph is the source)."""
+    ns = g["nodes"]
+    if args.node not in ns or not ns[args.node].get("file"): print(f"ERROR: `{args.node}` has no entity file"); return 1
+    path, _, anchor = args.source.partition("#")
+    if not os.path.exists(path): print(f"ERROR: `{path}` does not exist"); return 1
+    sec = doc_section(path, anchor)
+    if not sec: print(f"ERROR: no heading starting with `{anchor}` in `{path}`"); return 1
+    a, b, text = sec; n = ns[args.node]; f = n["file"]
+    if sha256_of(f) != n.get("sha256"): print(f"ERROR: `{f}` was changed outside graph_tool"); return 1
+    serial = (g.get("revision") or {}).get("serial", 0)
+    heading = f"Imported from {path}" + (f"#{anchor}" if anchor else "") + f" (lines {a}-{b}, graph revision {serial})"
+    print(f"## import-doc {args.node} <- {args.source}" + (" --dry-run" if args.dry_run else "")); print(f"- section `{heading}`: {len(text.splitlines())} lines, verbatim (headings demoted two levels)")
+    dropped = [d for d in n.get("docs", []) if d == args.source or (not anchor and d.split("#", 1)[0] == path)]
+    if dropped: print(f"- docs pointers dropped (the graph is the source now): {', '.join(dropped)}")
+    if args.dry_run: return 0
+    old = open(f, encoding="utf-8").read()
+    append_section(f, heading, demote(text)); n["sha256"] = sha256_of(f)  # headings two levels deeper, as migrate --plans does, so they cannot become entity sections
+    n["docs"] = [d for d in n.get("docs", []) if d not in dropped]
+    b4 = md5(args.graph)
+    try:
+        guarded_save(args.graph, g)
+    except WriteRefused:
+        open(f, "w", encoding="utf-8").write(old); raise
+    log_op(g, f"import-doc {args.node} <- {args.source} (lines {a}-{b})", args.graph, b4)
+    return cmd_validate(g, args)
+
+EXPORT_SKIP = ("Log", "Copies", "Primary source")
+
+def cmd_export(g, args):
+    """D48 (4): on request, render a design document snapshot from the graph (whole tree or the subtree of --node) to the
+    path the user names, headed by the graph revision. The graph is not changed; one log line records the export."""
+    ns = g["nodes"]; out = args.out
+    if os.path.normpath(out).startswith((ENTITY_DIR, "docs/views")) or os.path.normpath(out) == os.path.normpath(args.graph):
+        print("ERROR: export writes outside the store (not into docs/entities, the views or the graph)"); return 1
+    if os.path.exists(out) and not args.force: print(f"ERROR: `{out}` exists — choose another path or pass --force"); return 1
+    if args.node and args.node not in ns: print(f"ERROR: `{args.node}` not in nodes"); return 1
+    rev = g.get("revision") or {}
+    sec = lambda k: entity_sections(ns[k]["file"]) if ns[k].get("file") and os.path.exists(ns[k]["file"]) else {}
+    kids = lambda k: sorted(j for j, m in ns.items() if m.get("part_of") == [k] and m["type"] in ("component", "group", "feature", "function", "requirement") and not hidden(m) and not in_plan(ns, j))
+    systems = [k for k, n in ns.items() if n["type"] == "system"]
+    roots = [args.node] if args.node else (systems or sorted(k for k, n in ns.items() if n["type"] == "component" and not n.get("part_of")))
+    title = ns[roots[0]]["name"] if len(roots) == 1 else "Design"
+    o = [f"# {title} — design snapshot", "",
+         f"Graph revision {rev.get('serial', '—')} (updated {rev.get('updated', '—')}); exported {now_iso()} from `{args.graph}` by `graph_tool export`.",
+         "This document is a snapshot generated from the graph, which is the source (D48). Do not edit it; change the graph and export again.", ""]
+    def body(k, depth):
+        n = ns[k]; s = sec(k); h = "#" * min(depth + 2, 6)
+        o.append(f"{h} {n['name']} (`{k}`, {n['type']}" + (f", class {n['class']}" if n.get("class") else "") + ")"); o.append("")
+        meta = [f"code: {', '.join(f'`{c}`' for c in n['code_targets'])}" if n.get("code_targets") else "",
+                f"tests: {', '.join(f'`{c}`' for c in n['test_targets'])}" if n.get("test_targets") else "",
+                f"documents: {', '.join(n['docs'])}" if n.get("docs") else "",
+                f"depends on: {', '.join(n['depends_on'])}" if n.get("depends_on") else ""]
+        o.extend(f"- {m}" for m in meta if m)
+        if any(meta): o.append("")
+        for head, text in s.items():
+            if head in EXPORT_SKIP or not text or text.startswith(NOT_RECORDED): continue
+            o.extend([f"**{head}**", "", text, ""])
+        decs = sorted(j for j, m in ns.items() if m["type"] == "decision" and m.get("part_of") == [k] and m.get("wip_status") != "FOLDED")
+        if decs:
+            o.append("Decisions:"); o.extend(f"- {ns[j].get('source_ref', j)} ({decision_status(ns, j)}): {first_line(sec(j).get('Statement')) if sec(j) else ns[j]['name']}" for j in decs); o.append("")
+        iss = sorted(j for j, m in ns.items() if m["type"] == "issue" and m.get("part_of") == [k] and m.get("issue_status", "open") == "open")
+        if iss:
+            o.append("Open issues:"); o.extend(f"- {ns[j].get('source_ref', j)}: {ns[j]['name']}" for j in iss); o.append("")
+        for c in kids(k): body(c, depth + 1)
+    for r in roots: body(r, 0)
+    if args.since is not None:
+        ch = sorted((n.get("rev", 0), k) for k, n in ns.items() if n.get("rev", 0) > args.since)
+        o += [f"## Changed since revision {args.since}", ""] + [f"- rev {r}: `{k}` ({ns[k]['type']}) {ns[k]['name']}" for r, k in ch] + [""]
+    os.makedirs(os.path.dirname(out) or ".", exist_ok=True); open(out, "w", encoding="utf-8").write("\n".join(o).rstrip() + "\n")
+    log_op(g, f"export {out} (revision {rev.get('serial', '—')}" + (f", node {args.node}" if args.node else "") + ")", args.graph, md5(args.graph), force=True)
+    print(f"exported `{out}` at graph revision {rev.get('serial', '—')}"); return 0
+
 APPLY_REFUSED = ("install", "uninstall", "apply")
 
 def cmd_apply(g, args):
@@ -1994,6 +2115,8 @@ def main(argv=None):
     sp("set-source-ref", "node", "ref")
     p = sp("move", "node", "parent"); p.add_argument("--reason", required=True)
     p = sp("group", "id", "type", "name"); p.add_argument("--under", required=True); p.add_argument("children", nargs="+"); p.add_argument("--class", dest="cls"); p.add_argument("--summary"); p.add_argument("--criterion"); p.add_argument("--reason", required=True)
+    p = sp("import-doc", "node", "source"); p.add_argument("--dry-run", dest="dry_run", action="store_true")
+    p = sp("export"); p.add_argument("--out", required=True); p.add_argument("--node"); p.add_argument("--since", type=int); p.add_argument("--force", action="store_true")
     p = sp("apply", "file"); p.add_argument("--verbose", action="store_true")
     p = sp("refs"); p.add_argument("--doc", action="append"); p.add_argument("--json", action="store_true")
     p = sp("dissolve", "node"); p.add_argument("--map", action="append"); p.add_argument("--docs-to", dest="docs_to"); p.add_argument("--code-to", dest="code_to"); p.add_argument("--tests-to", dest="tests_to"); p.add_argument("--reason", required=True)
@@ -2008,7 +2131,7 @@ def main(argv=None):
     p = sp("attach", "node"); p.add_argument("--section", action="append"); p.add_argument("--as-plan", dest="as_plan", action="store_true")
     p = sp("render"); p.add_argument("--check", action="store_true")
     p = sp("migrate"); p.add_argument("--dry-run", dest="dry_run", action="store_true"); p.add_argument("--plans", action="store_true"); p.add_argument("--retire-registry", dest="retire_registry", metavar="FILE"); p.add_argument("--strip-graph-copies", dest="strip_graph_copies", action="store_true"); p.add_argument("--restore-folds", dest="restore_folds", action="store_true"); p.add_argument("--drop-handover-path", dest="drop_handover_path", action="store_true")
-    p.add_argument("--add-system", dest="add_system", action="store_true"); p.add_argument("--system-id", dest="system_id"); p.add_argument("--system-name", dest="system_name")
+    p.add_argument("--add-system", dest="add_system", action="store_true"); p.add_argument("--track-log", dest="track_log", action="store_true"); p.add_argument("--system-id", dest="system_id"); p.add_argument("--system-name", dest="system_name")
     p = sp("rename", "node", "name")
     p = sp("config", "action"); p.add_argument("key", nargs="?"); p.add_argument("value", nargs="?")
     for name, a in ap._subparsers._group_actions[0].choices.items():
@@ -2029,7 +2152,7 @@ def main(argv=None):
           "fold": cmd_fold, "split": cmd_split, "set-status": cmd_set_status, "add-edge": cmd_add_edge, "remove-edge": cmd_remove_edge, "set-current": cmd_set_current,
           "add-node": cmd_add_node, "lint-prose": cmd_lint_prose,
           "add-doc": cmd_add_path, "add-code": cmd_add_path, "add-test": cmd_add_path, "set-source-ref": cmd_set_source_ref,
-          "move": cmd_move, "group": cmd_group, "dissolve": cmd_dissolve, "apply": cmd_apply, "refs": cmd_refs, "backlog": cmd_backlog, "set-next": cmd_set_next,
+          "move": cmd_move, "group": cmd_group, "dissolve": cmd_dissolve, "apply": cmd_apply, "refs": cmd_refs, "import-doc": cmd_import_doc, "export": cmd_export, "backlog": cmd_backlog, "set-next": cmd_set_next,
           "set-issue": cmd_set_issue, "close": cmd_close, "add": cmd_add, "append": cmd_append, "attach": cmd_attach, "migrate": cmd_migrate, "rename": cmd_rename, "config": cmd_config, "render": cmd_render}[args.cmd](g, args)
     except WriteRefused as e:
         print("## write refused — the graph would be invalid; nothing was written (U31)")
